@@ -12,7 +12,7 @@
 
 ### 工作模式
 - **Claude 教，开发者动手**。不要替开发者写代码，让他自己敲。
-- 开发者背景：Java/Spring Boot 全栈 10 年，Python 只用过 pandas/numpy，**没用过 Python 写 web/接 API**。
+- 开发者背景：Master of IT 应届毕业生，Java/Spring Boot 学习背景，Python 只用过 pandas/numpy，**没用过 Python 写 web/接 API**。
 - 解释时多用 Java 类比（pyproject.toml ≈ pom.xml，uv ≈ Maven，virtualenv ≈ 项目级 classpath 隔离）。
 - 节奏要慢，每条消息只讲一小步、一个概念。开发者抱怨过"一次出来太多"。
 
@@ -30,7 +30,7 @@
   - 订阅模式：**管理员审批制**（开发者本人是 admin）
   - AI 切换：**OpenAI GPT，不能用千问**（国产模型对新闻类内容审查严，无法用）
   - 爬虫方案：**twscrape 自建**，先 AWS EC2 悉尼，失败降级到家里废笔记本
-  - 数据库：PostgreSQL，schema 重新设计了 6 张表（见 brief 第 5 节）
+  - 数据库：PostgreSQL，schema 重新设计了 8 张表（见 brief 第 5 节）
 - **2026-05-15 6.8 UTF-8 收紧**：从"代码里用 UTF-8"扩展到"所有读写 I/O 边界全部 UTF-8"，覆盖文件、日志、数据库、网络、subprocess、进程级 env、模板/prompt。
 - **2026-05-15 Python 降版**：3.14 → 3.12.13（PTB v21 不兼容 3.14）。`requires-python = ">=3.11,<3.14"`。
 - **2026-05-15 跨阶段决策**：先做 Stage 0 热身（最简 echo bot）熟悉 Python，再进正式开发。
@@ -70,7 +70,7 @@
 
 - ⬜ OpenAI API Key（进 Stage 3 前充值）
 - ⬜ X 爬虫小号（进 Stage 1 前注册）
-- ⬜ 家里废笔记本环境（Stage 1.5 失败时启用）
+- ⬜ 家里废笔记本环境（Stage 1.5 观察出 EC2 IP 被 X 风控时启用）
 
 ## 阻塞项
 
