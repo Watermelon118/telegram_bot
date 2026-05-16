@@ -126,7 +126,9 @@ async def main() -> None:
     captured_bodies: list[dict] = []
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+        # channel="chrome" 让 Playwright 用系统装的 Google Chrome，
+        # 避免 Playwright 自带 Chromium 被火绒/Defender 删
+        browser = await p.chromium.launch(headless=True, channel="chrome")
         context = await browser.new_context(
             user_agent=(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "

@@ -362,6 +362,12 @@ CREATE TABLE ai_call_log (
 - JSON 响应结构相对稳定（X 自家前端也要消费）
 - 缺点：Chromium 镜像 ~290MB；每次抓取启动浏览器 ~10 秒；CPU/RAM 占用比纯 HTTP 高
 
+**Windows 开发环境用 `channel="chrome"` 而不是 Playwright 自带 Chromium**：
+- 国产杀毒（火绒等）会把 Playwright 下载的 Chromium 当可疑文件删掉
+- Playwright 支持指定 `channel="chrome"` 让它用系统已装的 Google Chrome
+- 用系统 Chrome 火绒不会动（已被白名单），开发体验顺
+- 部署到 EC2 Linux 不用这个 channel，正常用 Playwright 下的 Chromium 即可
+
 #### 爬虫账号
 - 用一个**已经"养"过几个月的老号**（新号会被秒封，spike 阶段已验证）
 - **不要用日常账号**（被风控时连日常用号一起完蛋）
