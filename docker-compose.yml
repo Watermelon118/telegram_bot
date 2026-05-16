@@ -1,0 +1,33 @@
+# 本地开发用：起一个 Postgres 16 实例
+# 用法：
+#   docker compose up -d        # 后台启动
+#   docker compose down         # 关掉（数据保留）
+#   docker compose down -v      # 关掉 + 删数据
+#
+# 数据存在 Docker 命名卷 postgres_data 里，不在项目目录，git 不会污染。
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: x_digest_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: x_digest
+      # 强制 UTF-8（遵循 dev-conventions 6.8 全链路 UTF-8）
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    ports:
+      # 暴露 5432 到宿主，本地 Python 连 localhost:5432
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      # 让 docker 知道容器是否真的 ready（不只是进程在跑）
+      test: ["CMD-SHELL", "pg_isready -U postgres -d x_digest"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
