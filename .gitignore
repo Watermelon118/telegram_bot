@@ -16,3 +16,7 @@ wheels/
 # Env files (secrets)
 .env
 .env.local
+
+# twscrape local account/session DB (contains credentials + cookies)
+accounts.db
+accounts.db-*

@@ -109,7 +109,7 @@
 | 包管理 | `uv` |
 | Telegram 库 | `python-telegram-bot` v21+ |
 | AI SDK | `openai` 官方 Python SDK（直连 OpenAI，不走兼容端点） |
-| X 爬虫 | `twscrape`（目前最活跃的 X 爬虫库，支持账号池 + GraphQL API） |
+| X 爬虫 | `playwright`（headless Chromium）+ cookies 注入 + 拦截 X 自家 GraphQL 响应。**不是** twscrape（2026-05-16 spike 验证后切换，见决策记录） |
 | ORM | SQLAlchemy 2.0（async 模式） |
 | 数据库迁移 | Alembic |
 | 数据库 | PostgreSQL 16 |
@@ -345,34 +345,51 @@ CREATE TABLE ai_call_log (
 
 ### 6.6 X 爬虫策略
 
-**关键风险**：X 对爬虫极不友好，2024 年起匿名访问基本不可用，必须登录才能拿数据。
+**关键风险**：X 对爬虫极不友好，2024 年起匿名访问基本不可用，必须登录才能拿数据。**2026 年起 X 加了 JS bundle obfuscation + `x-client-transaction-id` header 强制要求**，主流开源 Python 爬虫库（twscrape、snscrape 等）基本全废。
+
+#### 选定方案：Playwright + cookies 注入 + 拦截 GraphQL
+
+**原理**：
+1. 起一个 headless Chromium，注入预先在浏览器获取的 X session cookies（`auth_token` + `ct0`）
+2. 用真实 Chrome UA 访问目标博主主页 `https://x.com/<screen_name>`
+3. **X 自家的前端 JS 会自动调 GraphQL 加载推文**（因为是真浏览器，X 的反爬通过 — fingerprint 真、cookies 真、JS 真在跑）
+4. 我们用 Playwright 的 `page.on("response", ...)` 拦截响应，专门收集 `UserTweets` 端点的 JSON
+5. 从 JSON 里挖出 `data.user.result.timeline.timeline.instructions[*].entries[*]` 里的推文数据
+
+**为什么这条路比 twscrape 稳**：
+- 不依赖任何 Python 库去反解 X 的反爬 → X 改 JS bundle 跟我们无关
+- fingerprint 是真 Chrome，被风控概率低
+- JSON 响应结构相对稳定（X 自家前端也要消费）
+- 缺点：Chromium 镜像 ~290MB；每次抓取启动浏览器 ~10 秒；CPU/RAM 占用比纯 HTTP 高
 
 #### 爬虫账号
-- 注册一个**专用 X 小号**（**不要用日常账号**），给 twscrape 使用
-- twscrape 通过用户名/密码登录，**密码以最小权限存 .env**：
+- 用一个**已经"养"过几个月的老号**（新号会被秒封，spike 阶段已验证）
+- **不要用日常账号**（被风控时连日常用号一起完蛋）
+- 账号 cookies 存 `.env`：
   ```
-  X_SCRAPER_USERNAME=...
-  X_SCRAPER_PASSWORD=...
-  X_SCRAPER_EMAIL=...
+  X_SCRAPER_USERNAME=...           # 仅做记录
+  X_SCRAPER_COOKIES=auth_token=xxx; ct0=yyy
   ```
-- 账号被 X 封了就重新注册一个，把项目里更新即可
-- 多账号池（未来扩展）：让 twscrape 在多个账号之间轮换降低封号风险
+- cookies 过期检测：抓取连续 N 次返回空 / 重定向到 `/login` → 告警，需要人工到浏览器重新登录并更新 cookies
 
 #### 抓取频率
 - 默认：**每小时抓一次**（00:05、01:05 ... 19:05）。最后一次抓取 19:05 完成后，19:30 跑 AI 摘要，20:00 推送
 - 不要在整点（00:00）抓 —— 跟其他爬虫日常请求高峰错开
-- 每次只拉博主**最近 50 条**推文（够覆盖 1 天发文量了），按 tweet id 去重
+- 每次抓首页一次加载量（约 17-25 条），按 tweet id 去重；如需更多用 `page.evaluate("window.scrollBy(...)")` 触发翻页
+- 浏览器实例**复用**：worker 进程启动时建一个 browser context，多次抓取共用，不要每次启停（启停浪费 10s）
 
 #### IP 风险
-- 先在 **AWS EC2 悉尼区** 试。AWS IP 段被 X 限流的可能性高
-- 监控指标：连续 24 小时内若爬取失败率 > 30%，告警，准备降级
-- **降级方案**：把爬虫单独搬到开发者家里那台废笔记本（新西兰住宅 IP），跑同样的 worker，数据库可以走云上 RDS 或者笔记本直连 EC2 的 Postgres
-- 长期方案：如果 EC2 也活、笔记本也活，**笔记本主、EC2 备**（家里偶尔停电就 EC2 顶上）
+- 先在 **AWS EC2 悉尼区** 试。AWS IP 段被 X 限流的可能性中等
+- 监控指标：连续 24 小时内若爬取失败率 > 30%（含拿到空响应、重定向、TLS 错误），告警准备降级
+- **降级方案**：把 worker 进程单独搬到开发者家里那台废笔记本（新西兰住宅 IP），跑同样的 worker，数据库放云上 RDS 或笔记本直连 EC2 Postgres
+- 长期方案：如果 EC2 也活、笔记本也活，**笔记本主 / EC2 备**（家里偶尔停电就 EC2 顶上）
 
 #### 媒体下载
-- 推文带图/视频时，下载到本地临时文件（不入库，太大）
+- 推文带图/视频时，从 `legacy.entities.media[]` 拿 `media_url_https`（图）或 `video_info.variants[-1].url`（视频高码率版）
+- 用 `httpx` 下载到本地临时文件（不入库，太大）
 - 立刻上传给 Telegram，Telegram 拿到后会返回一个 `file_id`，下次重发同一个文件用 `file_id` 不用重新上传
 - 推送完毕删除本地临时文件
+- 视频超 Telegram bot 50MB 限制时，只发缩略图 + 链接
 
 ### 6.7 Webhook vs Polling
 
@@ -471,22 +488,19 @@ CREATE TABLE ai_call_log (
 
 > **当前所在阶段**：Stage 0 热身已完成（uv + Python 3.12 + 最简 echo bot 跑通）。下面是正式 4 个阶段。**Stage 1 故意是 X 爬虫验证而不是项目骨架**，因为爬虫是最大不确定性，先证明能拿到数据再投入其他工作。
 
-### Stage 1：X 爬虫 spike（验证可行性，第一优先）
-**目标**：在 EC2 上（先本地试）能稳定抓到 @李老师不是你老师 当天的所有推文
+### Stage 1：X 爬虫 spike（验证可行性，第一优先）✅ 本地通过
 
-- [ ] 注册一个专用 X 爬虫账号（开发者完成）
-- [ ] `uv add twscrape`
-- [ ] 写一个独立脚本 `spike/x_scrape.py`，登录 + 抓取 + 打印推文列表
-- [ ] 本地 Windows 上跑通
-- [ ] 推到 EC2 悉尼跑通（验证 IP 是否被 X 风控）
-- [ ] 跑 24 小时（每小时一次）观察成功率和数据完整性
+**目标**：能稳定抓到 @whyyoutouzhele 当天的所有推文
 
-**判断标准**：
-- ✅ 成功率 > 90% → 走 EC2 方案，进 Stage 2
-- ⚠️ 成功率 50-90% → 调整频率 / 加重试，再观察
-- ❌ 成功率 < 50% → 降级方案：爬虫挪到家里笔记本
+- [x] 准备爬虫账号（用养过的老号 + 浏览器手动登录 + 导出 cookies）
+- [x] ~~`uv add twscrape`~~ —— **twscrape 0.17.0 被 X 反爬干掉**，issue #305，PR #303 未真正修复
+- [x] `uv add playwright` + `playwright install chromium`
+- [x] 写 `spike/x_scrape.py`：headless Chromium + cookies + 拦截 GraphQL
+- [x] 本地 Windows 跑通，一次抓 17 条今日推文，所有字段（含 views）正确
+- [ ] ⏸️ 推到 EC2 悉尼跑通（验证 IP 是否被 X 风控）—— 延后到 Stage 5 部署阶段一起做
+- [ ] ⏸️ 跑 24 小时观察成功率 —— 同上延后
 
-**交付物**：一份 spike 报告（写在 PROGRESS.md），结论是哪条路。
+**spike 结论**：技术路线可行（Playwright 路线）。EC2 IP 风险等部署阶段实测。
 
 ### Stage 2：项目骨架 + 数据持久化
 **目标**：可运行的项目结构，爬虫抓的推文能稳定落库
@@ -553,10 +567,13 @@ ADMIN_USER_ID=
 # OpenAI
 OPENAI_API_KEY=
 
-# X 爬虫账号（专用小号）
-X_SCRAPER_USERNAME=
+# X 爬虫账号（养过的老号，cookies 路线）
+X_SCRAPER_USERNAME=                     # 只做记录，不参与登录
+X_SCRAPER_COOKIES=auth_token=xxx; ct0=yyy   # 浏览器登录后从 DevTools 复制
+# 下面三个是备用（cookies 失效时用浏览器重登）
 X_SCRAPER_PASSWORD=
 X_SCRAPER_EMAIL=
+X_SCRAPER_EMAIL_PASSWORD=
 
 # 跟踪的 X 博主（未来扩展多个用配置文件，目前一个写死）
 TRACKED_X_AUTHOR=李老师不是你老师
