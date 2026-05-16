@@ -1,4 +1,4 @@
-# English Buddy Bot — Project Brief
+# Daily X Digest Bot — Project Brief
 
 > 这份文档是给 Claude Code 看的，包含完整的项目背景、需求、技术决策和开发路线。请在动手前完整读一遍，遇到歧义先问，不要自己脑补。
 
@@ -6,90 +6,98 @@
 
 ## 1. 项目背景
 
-**用户**：单人使用，开发者本人。新西兰奥克兰，Java/Spring Boot 全栈背景，Python 是为这个项目临时学的，所以代码风格要清晰、注释适度、便于学习理解。
+**用户**：开发者本人（管理员）+ 经管理员审批的少量订阅者。开发者在新西兰奥克兰，Java/Spring Boot 全栈背景，Python 是为这个项目临时学的，所以代码风格要清晰、注释适度、便于学习理解。
 
 **目标**：
-1. 做一个**自己每天会用**的 Telegram bot，帮助持续学习英语
+1. 做一个**每天自动总结某个 X 博主当日推文**的 Telegram bot
 2. 作为 GitHub 上的求职作品集项目，能在面试中讲清楚架构决策
-3. 部署在自有的 AWS EC2 服务器上
+3. 部署在自有的 AWS EC2 服务器上（悉尼区）
+
+**核心数据源**：X (Twitter) 博主 **@李老师不是你老师**（中文新闻聚合类博主，每日发文量较大）。
 
 **不是什么**：
-- 不是给多人用的 SaaS
-- 不是聊天机器人，不要做泛泛的 "AI 助手" 功能
-- 不是英语词典 / 翻译工具的替代品
+- 不是开放给所有人订阅的 SaaS（订阅需管理员审批）
+- 不是 X 全站搜索 / 实时新闻流（只跟踪一个博主）
+- 不是英语学习工具（项目早期 brief 是这个方向，已转型）
 
 ---
 
 ## 2. 功能需求
 
-### 2.1 推送功能
+### 2.1 每日推送
 
-**自动推送**
-- 时间：每周一、三、五、日 **早上 8:00（新西兰时间，Pacific/Auckland）**
-- 内容：1 条英语俚语 + 1 期 BBC 6 Minute English 的最新内容
-- 推过的内容要记录，避免重复
+**触发时间**：每天 **新西兰时间 20:00（Pacific/Auckland）** 自动推送给所有已批准的订阅者。
 
-**手动推送**
-- 命令：`/today`
-- 用户在非推送日（周二、四、六）或任何时候触发，返回当天该有的内容
+**推送内容**：当日（NZ 时间 00:00 - 20:00 这 20 小时内，按 X 博主推文的发布时间过滤）该博主发布的所有推文，分两段呈现：
 
-**推送内容格式**
+#### 第一段：头条推文（一条）
 
-俚语部分：
+**选择规则**：在当日所有推文里，按 **`comments + likes + views`** 三者之和最大的一条作为头条。
+
+**格式（按公众号头条样式排版）**：
+
 ```
-📚 今日俚语
+🔥 今日头条
 
-**[俚语词条]**
+[推文正文，原文照抄]
 
-含义：[中文解释]
-
-例句：
-1. [English example]
-   [中文翻译]
-2. [English example]
-   [中文翻译]
-3. [English example]
-   [中文翻译]
+📊 评论 1,234 · 点赞 5,678 · 浏览 123,456
+🔗 [原推文链接]
 ```
 
-BBC 部分：
+如果该推文带图片或视频：**下载原始媒体，作为 Telegram 原生 photo / video 消息独立发送一条**，配上面的文字作为 caption。多张图（X 最多 4 张）用 `sendMediaGroup` 组合发。视频如果超过 Telegram 50MB 限制（普通 bot），只发缩略图 + 链接，并在 caption 里说明"原视频较大，点击链接查看"。
+
+#### 第二段：今日要闻（其余推文摘要）
+
+剩下所有推文做一个**AI 生成的摘要列表**，让用户一眼看完今天发生了什么。格式：
+
 ```
-🎧 BBC 6 Minute English
+📰 今日要闻（共 X 条）
 
-**[Episode Title]**
-🔗 [原始链接]
+• [一句话提炼推文 1 核心] 🔗 [链接]
+• [一句话提炼推文 2 核心] 🔗 [链接]
+• ...
 
-📝 中文要点：
-[AI 基于 transcript 生成的 3-5 个要点]
-
-📖 重点词汇：
-- word1: 释义 + 用法
-- word2: 释义 + 用法
-- ...
+📝 整体看点：
+[AI 综合所有推文给出 2-3 句话的"今天主要在关注什么"总结]
 ```
 
-### 2.2 对话功能
+**特殊情况**：
+- 当日博主没发推：发一条"今天 @李老师不是你老师 没有更新"
+- 当日只有 1 条推：那一条就是头条，不出"今日要闻"段
+- 爬虫当日失败：发一条"今天数据抓取失败，请联系管理员"并通知管理员
 
-**命令 1：`/improve <英文文本>`**
-功能：改进英文表达
-返回：
-- 改进版本
-- 修改原因（逐条说明改了什么、为什么改）
+### 2.2 订阅管理（管理员审批制）
 
-**命令 2：`/express <中文意图>`**
-功能：把中文意图转成地道英文
-返回：
-- 地道英文表达（书面 / 口语都要覆盖，AI 根据上下文判断给哪种或都给）
-- 用法说明（什么场景用、为什么这么说）
-- 1-2 个相关替换说法
+**用户视角命令**：
+
+| 命令 | 行为 |
+|------|------|
+| `/start` | 显示欢迎信息和使用说明 |
+| `/subscribe` | 提交订阅申请。bot 把申请放进 `pending_requests` 表，**同时把申请通知发给管理员**（含申请人的 telegram user_id、用户名、申请时间） |
+| `/unsubscribe` | 取消自己的订阅。从 `subscribers` 表删除 |
+| `/status` | 查询自己当前状态：未申请 / 待审批 / 已订阅 / 已拒绝 |
+
+**管理员视角命令**（只有 `ADMIN_USER_ID` 能用）：
+
+| 命令 | 行为 |
+|------|------|
+| `/pending` | 列出所有待审批申请 |
+| `/approve <user_id>` | 批准某个申请，从 `pending_requests` 移到 `subscribers`，bot 通知该用户"你已被批准订阅" |
+| `/deny <user_id> [原因]` | 拒绝申请，记录拒绝原因，通知申请人 |
+| `/revoke <user_id>` | 撤销某个已订阅用户的订阅，通知该用户 |
+| `/subscribers` | 列出当前所有订阅者 |
+| `/broadcast <消息>` | 临时手动广播一条消息给所有订阅者（用于公告） |
+| `/test_push` | 立即触发一次今日推送（用于调试，只推给管理员自己） |
 
 ### 2.3 不做的功能（明确砍掉）
 
-- 翻译功能（Claude 网页/DeepL 已经够好）
-- 单词查询（同上）
-- 语音对话 / Voice mode
-- 多用户支持
+- 多博主跟踪（只一个）
+- 全文搜索历史推文
+- 评论互动 / 转发 / 引用功能
 - Web 管理后台
+- 推送时间个性化（所有订阅者统一 NZ 20:00）
+- 多语言界面（中文为主）
 
 ---
 
@@ -97,38 +105,39 @@ BBC 部分：
 
 | 模块 | 选型 |
 |------|------|
-| 语言 | Python 3.11+ |
+| 语言 | Python 3.12（不能用 3.14，PTB v21 不兼容） |
 | 包管理 | `uv` |
 | Telegram 库 | `python-telegram-bot` v21+ |
-| AI SDK | `openai` Python SDK（指向 DashScope OpenAI 兼容端点，调千问） |
-| ORM | SQLAlchemy 2.0 (async 模式) |
+| AI SDK | `openai` 官方 Python SDK（直连 OpenAI，不走兼容端点） |
+| X 爬虫 | `twscrape`（目前最活跃的 X 爬虫库，支持账号池 + GraphQL API） |
+| ORM | SQLAlchemy 2.0（async 模式） |
 | 数据库迁移 | Alembic |
 | 数据库 | PostgreSQL 16 |
+| 数据库驱动 | `asyncpg` |
 | 定时任务 | APScheduler |
-| HTTP 客户端 | `httpx` |
+| HTTP 客户端 | `httpx`（下载推文媒体） |
 | 配置管理 | `pydantic-settings` |
 | 容器化 | Docker + docker-compose |
-| 部署 | AWS EC2 |
+| 部署 | AWS EC2 悉尼区（ap-southeast-2） |
 
-**关于 AI 模型的选择策略**（千问系列，通过 DashScope 调用）：
+**关于 AI 模型的选择策略**（OpenAI GPT 系列）：
 
 | 任务 | 模型 | 理由 |
 |------|------|------|
-| 生成俚语 | `qwen-turbo` | 简单生成，最便宜（有免费额度） |
-| BBC 内容讲解 | `qwen-plus` | 需要理解 transcript |
-| 改英文 (`/improve`) | `qwen-plus` | 质量是核心价值 |
-| 地道表达 (`/express`) | `qwen-plus` | 同上 |
+| 单条推文摘要（要闻段每条一句话） | `gpt-4o-mini` | 数量多、任务简单、便宜 |
+| "今日整体看点" 2-3 句总结 | `gpt-4o` | 需要综合理解 |
+| （可选）头条推文深度解读 | `gpt-4o` | 高价值内容用好模型 |
 
-**这个选择是面试讲点**：不同任务用不同模型，平衡质量和成本。代码里要有清晰的封装让这件事可见。
+**这个选择是面试讲点**：不同任务用不同模型，平衡质量和成本。代码里要有清晰的封装（`ai/client.py`）让"换模型"只改一行。
 
-**为什么用 OpenAI SDK 调千问**：DashScope 提供了 OpenAI 兼容的 endpoint（`https://dashscope.aliyuncs.com/compatible-mode/v1`），可以直接用 `openai` Python 库，把 `base_url` 指过去就行。这样未来想换 OpenAI / DeepSeek / Moonshot 等任何 OpenAI 兼容的 provider，只改两行配置。
+**为什么不能用国产模型（千问、文心等）**：本项目核心是新闻聚合，中文 AI 服务对新闻类内容有严格的内容审查，会拒绝处理大量政治、社会议题。OpenAI GPT 没有这个问题。**这个项目永远不要切回千问。**
 
 ---
 
 ## 4. 项目结构
 
 ```
-english-buddy-bot/
+daily-x-digest-bot/
 ├── README.md
 ├── pyproject.toml
 ├── .env.example
@@ -138,26 +147,31 @@ english-buddy-bot/
 │
 ├── src/
 │   ├── __init__.py
-│   ├── main.py             # 入口
+│   ├── main.py             # Telegram bot 入口
+│   ├── worker.py           # 爬虫 + 推送 worker 入口（与 bot 进程分离）
 │   ├── config.py           # pydantic-settings 配置
 │   │
 │   ├── bot/
 │   │   ├── __init__.py
-│   │   ├── app.py          # Telegram Application 初始化
-│   │   ├── handlers.py     # 命令处理函数
-│   │   └── middleware.py   # 权限检查（限定单一用户）
+│   │   ├── app.py          # PTB Application 初始化
+│   │   ├── handlers/
+│   │   │   ├── __init__.py
+│   │   │   ├── user.py     # /start /subscribe /unsubscribe /status
+│   │   │   └── admin.py    # /pending /approve /deny /revoke /subscribers /broadcast /test_push
+│   │   └── middleware.py   # 权限分级（admin / subscriber / guest）
 │   │
 │   ├── services/
 │   │   ├── __init__.py
-│   │   ├── idiom.py
-│   │   ├── bbc.py
-│   │   ├── writing.py      # /improve
-│   │   ├── expression.py   # /express
-│   │   └── push.py         # 推送编排
+│   │   ├── twitter.py      # twscrape 封装：抓取指定博主的推文
+│   │   ├── media.py        # 下载推文媒体到本地临时文件
+│   │   ├── summary.py      # AI 摘要：单条摘要 + 整体看点
+│   │   ├── digest.py       # 编排"今日头条 + 今日要闻"的组装
+│   │   ├── push.py         # 广播给所有 subscribers
+│   │   └── subscription.py # 订阅状态机：申请/批准/拒绝/撤销
 │   │
 │   ├── ai/
 │   │   ├── __init__.py
-│   │   ├── client.py       # Anthropic 客户端封装
+│   │   ├── client.py       # OpenAI 客户端封装，含重试/超时/token 统计
 │   │   └── prompts.py      # Prompt 模板集中管理
 │   │
 │   ├── db/
@@ -168,81 +182,121 @@ english-buddy-bot/
 │   │
 │   ├── scheduler/
 │   │   ├── __init__.py
-│   │   └── jobs.py
+│   │   └── jobs.py         # APScheduler 任务：每小时爬取、每天 20:00 推送
 │   │
 │   └── utils/
 │       ├── __init__.py
-│       └── logger.py
+│       └── logger.py       # JSON 日志配置
 │
 └── tests/
 ```
 
 **架构原则**：
-1. **services 层不依赖 bot 层** —— services 只懂业务，不懂 Telegram。换成 Discord 或 CLI，services 不用动。
-2. **prompts 集中** —— 所有 prompt 模板放在 `ai/prompts.py`，便于版本化、迭代、对比。
-3. **配置走环境变量** —— 任何 secret、可变参数全部从 `.env` 读，代码里不出现 magic string。
-4. **handler 薄，service 厚** —— Telegram handler 只做解析参数、调 service、格式化回复。业务逻辑都在 service。
+1. **services 不依赖 bot 层** —— services 只懂业务（抓推文、摘要、推送），不懂 Telegram。换平台只改 bot 层。
+2. **bot 和 worker 分进程跑** —— Telegram bot 一直 polling 响应命令；worker 跑爬虫和定时推送。它们共享数据库但不共享内存。这样某一边崩了不影响另一边。
+3. **prompts 集中** —— 所有 prompt 模板放在 `ai/prompts.py`，便于版本化、迭代、A/B。
+4. **handler 薄，service 厚** —— handler 只做参数解析 + 调 service + 格式化回复。业务逻辑都在 service。
+5. **配置走环境变量** —— 任何 secret、可变参数全部从 `.env` 读，代码里不出现 magic string。
 
 ---
 
 ## 5. 数据库 Schema
 
 ```sql
+-- X 博主元数据（理论上支持未来加多个，目前只 1 个）
+CREATE TABLE x_authors (
+    id SERIAL PRIMARY KEY,
+    screen_name VARCHAR(64) UNIQUE NOT NULL,    -- 不带 @ 的 X username
+    display_name VARCHAR(128),
+    user_id_x VARCHAR(64),                       -- X 平台内部 user id
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 抓取到的推文
+CREATE TABLE tweets (
+    id BIGINT PRIMARY KEY,                       -- X 平台的 tweet id（snowflake，去重用）
+    author_id INTEGER REFERENCES x_authors(id),
+    text TEXT NOT NULL,
+    posted_at TIMESTAMPTZ NOT NULL,              -- 推文发布时间（X 原始）
+    reply_count INTEGER DEFAULT 0,
+    like_count INTEGER DEFAULT 0,
+    view_count INTEGER DEFAULT 0,
+    retweet_count INTEGER DEFAULT 0,
+    quote_count INTEGER DEFAULT 0,
+    media JSONB,                                  -- [{type:'photo'|'video'|'gif', url:'...', ...}]
+    permalink VARCHAR(500),                       -- 原推文 URL
+    raw_payload JSONB,                            -- 原始抓取数据，留底
+    scraped_at TIMESTAMPTZ DEFAULT NOW(),
+    last_metric_update_at TIMESTAMPTZ DEFAULT NOW()  -- 统计数据最后一次更新
+);
+
+CREATE INDEX idx_tweets_posted_at ON tweets(posted_at);
+CREATE INDEX idx_tweets_author_posted ON tweets(author_id, posted_at);
+
+-- 每日推送摘要（落库，方便回溯和调试）
+CREATE TABLE daily_digests (
+    id SERIAL PRIMARY KEY,
+    digest_date DATE NOT NULL,                    -- NZ 时区的日期
+    author_id INTEGER REFERENCES x_authors(id),
+    featured_tweet_id BIGINT REFERENCES tweets(id),
+    other_tweet_ids BIGINT[],                     -- 当日其他推文 id 列表
+    summary_per_tweet JSONB,                      -- {tweet_id: "一句话摘要"}
+    overall_takeaway TEXT,                        -- "整体看点" 2-3 句
+    generated_at TIMESTAMPTZ DEFAULT NOW(),
+    model_used VARCHAR(64),
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    UNIQUE(digest_date, author_id)
+);
+
+-- 订阅者
+CREATE TABLE subscribers (
+    user_id BIGINT PRIMARY KEY,                   -- Telegram user id
+    username VARCHAR(64),                          -- Telegram @username（可能为空）
+    first_name VARCHAR(128),
+    approved_at TIMESTAMPTZ DEFAULT NOW(),
+    approved_by BIGINT,                            -- 哪个管理员批的（目前只有一个，未来扩展）
+    enabled BOOLEAN DEFAULT TRUE,                  -- 订阅者可以暂停而不删除
+    last_pushed_at TIMESTAMPTZ
+);
+
+-- 待审批申请
+CREATE TABLE pending_requests (
+    user_id BIGINT PRIMARY KEY,
+    username VARCHAR(64),
+    first_name VARCHAR(128),
+    requested_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 拒绝记录（避免被拒了反复申请）
+CREATE TABLE denied_users (
+    user_id BIGINT PRIMARY KEY,
+    username VARCHAR(64),
+    denied_at TIMESTAMPTZ DEFAULT NOW(),
+    reason TEXT
+);
+
 -- 推送历史
 CREATE TABLE push_history (
     id SERIAL PRIMARY KEY,
-    push_date DATE NOT NULL,
-    content_type VARCHAR(20) NOT NULL,  -- 'idiom' / 'bbc'
-    content_id VARCHAR(255),             -- 俚语词条 / BBC episode url
-    content_summary TEXT,
+    digest_id INTEGER REFERENCES daily_digests(id),
+    user_id BIGINT REFERENCES subscribers(user_id),
     sent_at TIMESTAMPTZ DEFAULT NOW(),
     success BOOLEAN DEFAULT TRUE,
     error_message TEXT
 );
 
--- 俚语历史（避免短期内重复推送）
-CREATE TABLE idiom_history (
+-- AI 调用日志（成本追踪）
+CREATE TABLE ai_call_log (
     id SERIAL PRIMARY KEY,
-    idiom VARCHAR(255) UNIQUE NOT NULL,
-    meaning TEXT,
-    examples JSONB,
-    generated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- BBC 内容缓存
-CREATE TABLE bbc_episodes (
-    id SERIAL PRIMARY KEY,
-    episode_url VARCHAR(500) UNIQUE NOT NULL,
-    title VARCHAR(500),
-    publish_date DATE,
-    transcript TEXT,
-    ai_summary TEXT,
-    ai_vocabulary JSONB,
-    fetched_at TIMESTAMPTZ DEFAULT NOW(),
-    pushed BOOLEAN DEFAULT FALSE,
-    pushed_at TIMESTAMPTZ
-);
-
--- 用户设置（虽然只有一个用户，但保留扩展性）
-CREATE TABLE user_settings (
-    user_id BIGINT PRIMARY KEY,           -- Telegram user id
-    push_time TIME DEFAULT '08:00',
-    timezone VARCHAR(50) DEFAULT 'Pacific/Auckland',
-    enabled BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- 对话日志（用于后续分析 token 用量）
-CREATE TABLE conversation_log (
-    id SERIAL PRIMARY KEY,
-    user_id BIGINT NOT NULL,
-    command VARCHAR(50),                  -- 'improve' / 'express'
-    user_input TEXT,
-    bot_response TEXT,
-    model_used VARCHAR(100),
+    purpose VARCHAR(64),                          -- 'per_tweet_summary' / 'overall_takeaway' / ...
+    model VARCHAR(64),
     input_tokens INTEGER,
     output_tokens INTEGER,
+    cost_usd NUMERIC(10, 6),
+    duration_ms INTEGER,
+    success BOOLEAN DEFAULT TRUE,
+    error_message TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 ```
@@ -253,124 +307,239 @@ CREATE TABLE conversation_log (
 
 ## 6. 关键工程要求
 
-### 6.1 权限控制
-Bot 必须只响应一个 Telegram User ID（写在 `.env` 里）。其他人发消息直接忽略或回 "Not authorized"。
+### 6.1 权限分级
+
+三个等级：
+- **Admin**：`ADMIN_USER_ID`（写在 `.env`），独占所有 `/admin` 类命令
+- **Subscriber**：在 `subscribers` 表里且 `enabled = TRUE` 的用户，能收每日推送
+- **Guest**：其他任何 Telegram 用户，**只能用 `/start` `/subscribe` `/status`**，发其他消息忽略或回 "Not authorized"
+
+中间件（`bot/middleware.py`）在 handler 触发前做权限检查，未授权直接拦截。
 
 ### 6.2 时区
-- 服务器时区可能是 UTC，所有定时任务用 `Pacific/Auckland`。
-- APScheduler 调度时显式指定时区。
-- 数据库时间用 `TIMESTAMPTZ`（带时区）。
+
+- 服务器时区可能 UTC，所有定时任务用 `Pacific/Auckland` 显式指定
+- "当日"定义：NZ 时间 00:00 - 20:00 这 20 小时（按推文 `posted_at` 转 NZ 时区过滤）
+- 数据库时间统一 `TIMESTAMPTZ`
 
 ### 6.3 错误处理
-- 所有 AI 调用要有重试逻辑（指数退避，最多 3 次）
-- BBC 抓取失败不能阻塞俚语推送（独立失败）
-- 任何失败都要写日志 + 写入 `push_history.error_message`
-- Bot 收到 unknown command 要友好回复，不能崩
+
+- 所有 AI 调用：指数退避重试 3 次
+- 爬虫失败：单次任务失败记日志，下次定时再试
+- 推送失败：单个用户失败不影响其他用户（继续循环）
+- Bot 收到 unknown command：友好回复 "Unknown command, send /start for help"
+- 关键错误（爬虫连续 N 次失败、推送任务整体失败）：通过 bot 把告警消息发给管理员
 
 ### 6.4 日志
-- 用 Python 标准 logging，配置成 JSON 格式（部署到 EC2 后方便用 CloudWatch 或 ELK 处理）
-- 关键操作（推送、AI 调用、错误）必须有日志
-- 不要 print
 
-### 6.5 Token 用量追踪
-- 每次 AI 调用记录 `input_tokens` / `output_tokens` 到 `conversation_log`
-- 写一个简单的 `/stats` 命令（可选 v2 加），返回本月 token 用量和估算成本
+- Python 标准 `logging`，JSON 格式（生产部署便于 CloudWatch / ELK 处理）
+- 关键操作必须有日志：爬虫每次抓取（数量 + 时长）、AI 调用、推送结果、订阅状态变化
+- **不要 print**
+- 所有 logging handler 显式 `encoding="utf-8"`（见 6.8）
 
-### 6.6 BBC 内容源
-**待调研**（在阶段 3 开始时调研）：
-- 优先尝试 BBC Learning English 的 RSS / podcast feed
-- 如果没有，解析 https://www.bbc.co.uk/learningenglish/english/features/6-minute-english 页面
-- **重要**：不要把完整 transcript 推给用户（版权问题）。只推链接 + AI 生成的摘要 + 重点词汇。
+### 6.5 Token / 成本追踪
+
+- 每次 OpenAI 调用记录 `model` / `input_tokens` / `output_tokens` / `cost_usd` 到 `ai_call_log`
+- cost_usd 在记录时按当前模型价格表算好（不在查询时算，避免历史价格变了对不上）
+- 提供 admin 命令 `/cost [days]` 查看近 N 天 AI 总开销
+
+### 6.6 X 爬虫策略
+
+**关键风险**：X 对爬虫极不友好，2024 年起匿名访问基本不可用，必须登录才能拿数据。
+
+#### 爬虫账号
+- 注册一个**专用 X 小号**（**不要用日常账号**），给 twscrape 使用
+- twscrape 通过用户名/密码登录，**密码以最小权限存 .env**：
+  ```
+  X_SCRAPER_USERNAME=...
+  X_SCRAPER_PASSWORD=...
+  X_SCRAPER_EMAIL=...
+  ```
+- 账号被 X 封了就重新注册一个，把项目里更新即可
+- 多账号池（未来扩展）：让 twscrape 在多个账号之间轮换降低封号风险
+
+#### 抓取频率
+- 默认：**每小时抓一次**（00:05、01:05 ... 19:05）。最后一次抓取 19:05 完成后，19:30 跑 AI 摘要，20:00 推送
+- 不要在整点（00:00）抓 —— 跟其他爬虫日常请求高峰错开
+- 每次只拉博主**最近 50 条**推文（够覆盖 1 天发文量了），按 tweet id 去重
+
+#### IP 风险
+- 先在 **AWS EC2 悉尼区** 试。AWS IP 段被 X 限流的可能性高
+- 监控指标：连续 24 小时内若爬取失败率 > 30%，告警，准备降级
+- **降级方案**：把爬虫单独搬到开发者家里那台废笔记本（新西兰住宅 IP），跑同样的 worker，数据库可以走云上 RDS 或者笔记本直连 EC2 的 Postgres
+- 长期方案：如果 EC2 也活、笔记本也活，**笔记本主、EC2 备**（家里偶尔停电就 EC2 顶上）
+
+#### 媒体下载
+- 推文带图/视频时，下载到本地临时文件（不入库，太大）
+- 立刻上传给 Telegram，Telegram 拿到后会返回一个 `file_id`，下次重发同一个文件用 `file_id` 不用重新上传
+- 推送完毕删除本地临时文件
 
 ### 6.7 Webhook vs Polling
+
 - 本地开发：Polling
 - 生产部署：Webhook（HTTPS + Nginx 反代 + Let's Encrypt）
 - 代码层面通过环境变量切换：`BOT_MODE=polling|webhook`
 
-### 6.8 编码统一 UTF-8（强制，无例外）
+### 6.8 全链路 UTF-8（强制，无例外）
 
-开发机是 Windows，PowerShell 控制台和 Python 在 Windows 上的默认编码是系统区域编码（中文 Windows 通常是 GBK / cp936），不显式指定会出现"本地能跑、Linux 服务器乱码"或"读 .env 中文注释报错"等坑。**全链路强制 UTF-8**：
+**核心原则**：项目里任何涉及"字节 ↔ 字符串"转换的地方，**全部显式 UTF-8**。不依赖任何"系统默认编码"。看到字符串和字节流交界处必须问自己"这里编码是什么"，答案永远是 UTF-8。
 
-1. **所有源文件保存为 UTF-8（无 BOM）**。`.py` / `.toml` / `.md` / `.env` / `.sql` 全部 UTF-8。IDE 和编辑器默认编码必须设成 UTF-8。
-2. **任何 `open()` 必须显式传 `encoding="utf-8"`**。绝对禁止 `open(path)` 不带 encoding 参数 —— 在 Windows 上等于按 GBK 打开。
-   ```python
-   # ❌ 错
-   with open("data.txt") as f: ...
-   # ✅ 对
-   with open("data.txt", encoding="utf-8") as f: ...
-   ```
-3. **`logging` 文件 handler 必须显式 `encoding="utf-8"`**：
-   ```python
-   logging.FileHandler("app.log", encoding="utf-8")
-   ```
-4. **数据库连接强制 UTF-8**。PostgreSQL DSN 加 `client_encoding=utf8`，建库时用 `ENCODING 'UTF8'`。
-5. **启动入口设置 `PYTHONUTF8=1`**（Python 3.7+ UTF-8 mode），让所有 I/O 默认 UTF-8。Docker 镜像里写到 `ENV`，本地开发写到 `.env` 或启动脚本。
-6. **HTTP 客户端响应处理显式 decode**。`httpx` 拿到 bytes 后 `.decode("utf-8")`，不依赖响应头里的 charset 推断。
-7. **subprocess / 外部命令调用** 加 `encoding="utf-8"`：
-   ```python
-   subprocess.run([...], capture_output=True, text=True, encoding="utf-8")
-   ```
+**为什么这么严**：开发机 Windows 默认 GBK/cp936，生产 Linux 默认 UTF-8。不显式指定会出现"本地跑得好好的、上线就乱码"这种最难查的 bug。
 
-**这条规则没有例外**。如果某个第三方库不支持显式编码、必须依赖系统默认，在 PR 描述里单独标注并讨论。
+**适用范围 —— 所有读写操作，无例外**：
+
+#### 文件 I/O
+
+- **所有源代码、配置、文档、数据文件保存为 UTF-8（无 BOM）**：`.py` / `.toml` / `.md` / `.env` / `.sql` / `.json` / `.yaml` / `.csv` / `.txt` 全部。IDE 默认编码强制设 UTF-8。
+- **任何 `open()` 必须显式传 `encoding="utf-8"`**，包括读、写、追加。禁止裸 `open(path)`。
+  ```python
+  # ❌ 错
+  with open("data.txt") as f: ...
+  open("out.txt", "w").write(s)
+  # ✅ 对
+  with open("data.txt", encoding="utf-8") as f: ...
+  open("out.txt", "w", encoding="utf-8").write(s)
+  ```
+- `pathlib.Path` 的 `read_text` / `write_text` 同样强制：
+  ```python
+  Path("x.txt").read_text(encoding="utf-8")
+  Path("x.txt").write_text(s, encoding="utf-8")
+  ```
+
+#### 日志
+
+- 控制台 handler 在 Windows 上要确保 stream 是 UTF-8（设 `PYTHONIOENCODING=utf-8` 或 `PYTHONUTF8=1`）。
+- 文件 handler 显式：`logging.FileHandler("app.log", encoding="utf-8")`。
+- 第三方 logging 框架（`structlog` 等）同样要确认底层 handler UTF-8。
+
+#### 数据库
+
+- PostgreSQL：建库 `ENCODING 'UTF8'`、`LC_COLLATE='C.UTF-8'`，连接字符串加 `client_encoding=utf8`。
+- 所有 schema 的 `VARCHAR` / `TEXT` 字段都默认存 UTF-8 不需要额外字段，但要确认 server 端 encoding 是 UTF8。
+
+#### 网络 I/O
+
+- `httpx` / `requests` 拿到响应：显式 `.content.decode("utf-8")`，不要依赖响应头 charset 推断（很多 API 不带或带错）。
+- 发请求 body 是 dict 用 json：库会自动 UTF-8，OK。手动构造 bytes 时显式 `.encode("utf-8")`。
+- 第三方 SDK（telegram、openai、twscrape 等）内部 UTF-8 由库保证，但**我们传给它的字符串必须确认是 UTF-8 字符串**（Python 3 的 `str` 内部本来就是 Unicode，从文件/网络读进来时按 UTF-8 解码即可）。
+
+#### 进程间通信
+
+- `subprocess.run` / `Popen`：必须传 `encoding="utf-8"`，否则 Windows 上按 GBK 解码子进程输出会乱码。
+  ```python
+  subprocess.run([...], capture_output=True, text=True, encoding="utf-8")
+  ```
+- 管道、socket 同理。
+
+#### 进程级兜底
+
+- 容器入口、systemd unit、PowerShell 启动脚本统一设：
+  ```
+  PYTHONUTF8=1
+  PYTHONIOENCODING=utf-8
+  LANG=C.UTF-8
+  LC_ALL=C.UTF-8
+  ```
+- Dockerfile 必须有 `ENV PYTHONUTF8=1 PYTHONIOENCODING=utf-8 LANG=C.UTF-8`。
+
+#### 模板 / Prompt / 提示词
+
+- 任何提示词模板文件（`prompts/*.txt` 或 `*.md`）保存 UTF-8，读取时显式 `encoding="utf-8"`。
+- jinja2 / 字符串模板渲染产物用前确认是 `str`（已经是 Unicode），落盘或发送时再 `.encode("utf-8")`。
+
+#### 例外处理
+
+**这条规则没有例外**。如果某个第三方库不支持显式编码、必须依赖系统默认，在代码处用 `# noqa: utf8` 注释并在 commit message 里单独说明原因。Code review 时此处会被反复盯。
+
+### 6.9 隐私 / 安全
+
+- `subscribers` / `pending_requests` 表里存的是 Telegram user_id + username + first_name，属个人数据
+- 用户 `/unsubscribe` 时硬删除（不留 soft-delete 历史）
+- 不存任何聊天内容，只存订阅状态
+- `.env` 里的 X 账号密码、OpenAI key、Telegram bot token 永远不入库不入 log
+- `ai_call_log` 不存推文原文（避免重复存储 + 隐私），只存 token 数
+
+### 6.10 Telegram 速率限制
+
+- Telegram bot API：约**每秒 30 条**到不同 chat 的消息（同一 chat 内更紧）
+- 推送时遍历订阅者循环发送，**每条之间 sleep 50ms**（保守，应对几百订阅者绰绰有余）
+- 单个用户连续失败 3 次（被 block 等）：标记 `enabled = FALSE`，下次不再推
 
 ---
 
 ## 7. 开发路线（按阶段交付）
 
-### 阶段 1：基础骨架（必须最先完成）
-**目标**：bot 能收能发，部署能跑
+> **当前所在阶段**：Stage 0 热身已完成（uv + Python 3.12 + 最简 echo bot 跑通）。下面是正式 4 个阶段。**Stage 1 故意是 X 爬虫验证而不是项目骨架**，因为爬虫是最大不确定性，先证明能拿到数据再投入其他工作。
 
-- [ ] `uv init` 初始化项目，配置 pyproject.toml
-- [ ] 完整目录结构搭建（src/ 下所有 `__init__.py`）
-- [ ] `config.py` 用 pydantic-settings 加载 .env
-- [ ] `.env.example` 列出所有需要的配置
-- [ ] docker-compose.yml 起一个 Postgres 16
-- [ ] SQLAlchemy + Alembic 初始化，写第一个迁移
-- [ ] 实现 `/ping` 命令，回复 "pong"
-- [ ] 权限中间件（只响应配置的 user id）
-- [ ] 基础日志配置
-- [ ] README 写起来（架构图、本地运行步骤）
+### Stage 1：X 爬虫 spike（验证可行性，第一优先）
+**目标**：在 EC2 上（先本地试）能稳定抓到 @李老师不是你老师 当天的所有推文
 
-**交付物**：本地 `uv run python -m src.main` 能跑，给 bot 发 /ping 收到 pong。
+- [ ] 注册一个专用 X 爬虫账号（开发者完成）
+- [ ] `uv add twscrape`
+- [ ] 写一个独立脚本 `spike/x_scrape.py`，登录 + 抓取 + 打印推文列表
+- [ ] 本地 Windows 上跑通
+- [ ] 推到 EC2 悉尼跑通（验证 IP 是否被 X 风控）
+- [ ] 跑 24 小时（每小时一次）观察成功率和数据完整性
 
-### 阶段 2：对话功能（先做，因为最简单也最实用）
-**目标**：`/improve` 和 `/express` 能用
+**判断标准**：
+- ✅ 成功率 > 90% → 走 EC2 方案，进 Stage 2
+- ⚠️ 成功率 50-90% → 调整频率 / 加重试，再观察
+- ❌ 成功率 < 50% → 降级方案：爬虫挪到家里笔记本
 
-- [ ] `ai/client.py` 封装 Anthropic 调用，支持模型切换、重试、token 统计
-- [ ] `ai/prompts.py` 写 improve 和 express 的 prompt 模板
-- [ ] `services/writing.py` 实现 improve 业务逻辑
-- [ ] `services/expression.py` 实现 express 业务逻辑
-- [ ] handler 接入，把命令路由到 service
-- [ ] 写入 conversation_log
-- [ ] 测试：发 `/improve I want apply your company` 看输出
+**交付物**：一份 spike 报告（写在 PROGRESS.md），结论是哪条路。
 
-**交付物**：两个对话命令可用，输出格式良好，token 用量有记录。
+### Stage 2：项目骨架 + 数据持久化
+**目标**：可运行的项目结构，爬虫抓的推文能稳定落库
 
-### 阶段 3：BBC 推送
-**目标**：能抓 BBC 内容并生成讲解
+- [ ] 按第 4 节项目结构重组代码（拆出 src/ 各模块）
+- [ ] `pydantic-settings` 配置管理替代直接读 os.environ
+- [ ] docker-compose 起 PostgreSQL 16
+- [ ] SQLAlchemy 2.0 async 模型定义
+- [ ] Alembic 初始化 + 第一个迁移建所有表
+- [ ] `services/twitter.py` 把 spike 脚本封装成 service，写入 `tweets` 表
+- [ ] APScheduler 每小时跑一次抓取
+- [ ] 现有 echo bot 重构为正式 handler，加权限中间件
 
-- [ ] 调研 BBC 内容源（RSS / Page / Podcast feed），写一个 spike 脚本验证
-- [ ] `services/bbc.py` 实现：检查最新一期、抓取 transcript、调 AI 生成摘要和词汇
-- [ ] 存到 `bbc_episodes` 表
-- [ ] 写格式化函数，组织成推送消息
-- [ ] 临时用一个测试命令 `/test_bbc` 触发，验证完整流程
+**交付物**：跑一晚上，数据库 `tweets` 表里有当日所有推文。
 
-**交付物**：手动触发能拿到一期 BBC 的完整推送内容。
+### Stage 3：AI 摘要管线 + 媒体处理
+**目标**：能生成完整的"今日头条 + 今日要闻"内容包
 
-### 阶段 4：俚语 + 定时调度 + 收尾
-**目标**：自动推送跑起来，项目完整
+- [ ] `uv add openai`
+- [ ] `ai/client.py` 封装 OpenAI 调用，含重试、超时、token 统计 → 写入 `ai_call_log`
+- [ ] `ai/prompts.py` 写 per-tweet 摘要 + overall_takeaway 两个 prompt
+- [ ] `services/summary.py` 实现摘要业务逻辑
+- [ ] `services/media.py` 下载推文图片 / 视频到本地临时目录
+- [ ] `services/digest.py` 编排：取当日推文 → 选头条 → AI 摘要其余 → 组装内容包 → 落 `daily_digests`
+- [ ] 临时命令 `/test_digest` 让管理员手动触发，回复完整内容到管理员对话
 
-- [ ] `services/idiom.py` 生成俚语，去重（检查 idiom_history）
-- [ ] `services/push.py` 编排：俚语 + BBC 一起组装发送
-- [ ] `scheduler/jobs.py` APScheduler 配置周一三五日 8:00 任务
-- [ ] `/today` 命令实现手动触发
-- [ ] 错误处理 + 重试完善
-- [ ] Dockerfile 写好
-- [ ] 部署文档（EC2 上怎么跑）
-- [ ] Webhook 模式实现 + Nginx 配置示例
-- [ ] README 最终完善（含架构图、技术决策说明、部署步骤、成本估算）
+**交付物**：管理员发 `/test_digest`，收到格式完美的头条 + 要闻内容包。
 
-**交付物**：完整项目，部署到 AWS 上跑起来，每周一三五日 8 点收到推送。
+### Stage 4：订阅管理 + 管理员审批流
+**目标**：完整的订阅生命周期
+
+- [ ] `services/subscription.py` 实现状态机（申请→批准/拒绝→订阅/撤销）
+- [ ] `bot/handlers/user.py` 实现 `/subscribe` `/unsubscribe` `/status`
+- [ ] `bot/handlers/admin.py` 实现 `/pending` `/approve` `/deny` `/revoke` `/subscribers`
+- [ ] 申请到达时 bot 自动通知管理员
+- [ ] 审批结果自动通知申请人
+
+**交付物**：从一个陌生 Telegram 账号 `/subscribe`，管理员收到通知，`/approve`，对方收到"已批准"。
+
+### Stage 5：每日推送 + 调度 + 部署
+**目标**：项目完整，挂着自己跑
+
+- [ ] `services/push.py` 实现广播：遍历 subscribers，按速率限制发头条 + 要闻
+- [ ] `scheduler/jobs.py` 加上 NZ 20:00 推送任务
+- [ ] `/test_push` 命令仅推给管理员，验证全流程
+- [ ] `/broadcast` 临时公告命令
+- [ ] 失败重试 + 错误兜底完善
+- [ ] Dockerfile + docker-compose 生产配置
+- [ ] EC2 部署文档（systemd 起 bot + worker 两个进程）
+- [ ] Webhook 模式 + Nginx + Let's Encrypt 配置示例
+- [ ] README 最终完善（架构图、技术决策说明、部署步骤、成本估算、风险）
+
+**交付物**：EC2 上挂着跑，每天 NZ 20:00 收到推送。
 
 ---
 
@@ -379,28 +548,38 @@ Bot 必须只响应一个 Telegram User ID（写在 `.env` 里）。其他人发
 ```
 # Telegram
 TELEGRAM_BOT_TOKEN=
-TELEGRAM_ALLOWED_USER_ID=
+ADMIN_USER_ID=
 
-# DashScope (千问)
-DASHSCOPE_API_KEY=
-DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+# OpenAI
+OPENAI_API_KEY=
+
+# X 爬虫账号（专用小号）
+X_SCRAPER_USERNAME=
+X_SCRAPER_PASSWORD=
+X_SCRAPER_EMAIL=
+
+# 跟踪的 X 博主（未来扩展多个用配置文件，目前一个写死）
+TRACKED_X_AUTHOR=李老师不是你老师
 
 # Database
-DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/english_buddy
+DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/x_digest
 
 # App
 BOT_MODE=polling                # polling | webhook
-WEBHOOK_URL=                    # 仅 webhook 模式需要
+WEBHOOK_URL=
 WEBHOOK_PORT=8443
 TIMEZONE=Pacific/Auckland
-PUSH_TIME=08:00
+PUSH_TIME=20:00
 LOG_LEVEL=INFO
 
 # Models
-MODEL_IDIOM=qwen-turbo
-MODEL_BBC=qwen-plus
-MODEL_WRITING=qwen-plus
-MODEL_EXPRESSION=qwen-plus
+MODEL_PER_TWEET=gpt-4o-mini
+MODEL_OVERALL=gpt-4o
+MODEL_FEATURED_ANALYSIS=gpt-4o   # 可选，深度解读头条用
+
+# 编码统一（见 6.8）
+PYTHONUTF8=1
+PYTHONIOENCODING=utf-8
 ```
 
 ---
@@ -410,12 +589,14 @@ MODEL_EXPRESSION=qwen-plus
 这个项目要给面试官看，README 不能糊弄。必须有：
 
 1. **项目简介**（一句话说清楚做什么）
-2. **架构图**（mermaid 画的那种，展示各组件关系）
-3. **技术选型理由**（为什么 Postgres / 为什么 APScheduler / 为什么不同任务用不同模型）
-4. **本地开发步骤**（clone → 装 uv → 配 .env → docker-compose up → migration → run）
-5. **部署步骤**（AWS EC2 + Docker + Nginx + HTTPS）
-6. **成本估算**（每月大概多少美元 token）
-7. **未来计划 / 已知限制**
+2. **架构图**（mermaid 画的那种，展示 bot / worker / scraper / db / OpenAI / Telegram 之间的关系）
+3. **技术选型理由**（为什么 Postgres、为什么 PTB v21、为什么 twscrape、为什么 OpenAI 不用国内模型、为什么 bot/worker 分进程）
+4. **本地开发步骤**（clone → uv → 配 .env → docker-compose up Postgres → migration → 跑 bot & worker）
+5. **部署步骤**（AWS EC2 悉尼 + Docker + Nginx + HTTPS + systemd）
+6. **成本估算**（每月 OpenAI / EC2 / 住宅代理 大概多少美元）
+7. **风险与降级方案**（X 反爬、IP 被封、爬虫账号被封时怎么办）
+8. **隐私声明**（订阅者数据怎么处理）
+9. **未来计划 / 已知限制**
 
 ---
 
@@ -423,32 +604,45 @@ MODEL_EXPRESSION=qwen-plus
 
 1. **先读完整份文档再动手**。不要读到第 3 节就开始写代码。
 2. **遇到歧义先问**。比如某个 prompt 怎么写、某个抓取策略不确定，先问开发者再动手。
-3. **不要扩展功能**。文档没说的功能就是不做。比如不要自己加"翻译"命令，不要自己加 web 后台。
-4. **按阶段交付**。完成阶段 1 让开发者验证，再进阶段 2。每个阶段完成时给出"如何验证"的具体步骤。
+3. **不要扩展功能**。文档没说的功能就是不做。不要加翻译命令、不要加 web 后台、不要加多博主支持。
+4. **按阶段交付**。完成一个 Stage 让开发者验证，再进下一个。每个阶段完成时给出"如何验证"的具体步骤。
 5. **代码风格**：
-   - 用 type hints（开发者是 Java 背景，喜欢类型）
+   - 用 type hints（开发者 Java 背景，喜欢类型）
    - 关键函数有 docstring
-   - 复杂逻辑写注释（不是每行都写，是关键决策处写）
+   - 复杂逻辑写注释（关键决策处写）
    - 不要过度抽象（YAGNI），但分层要清晰
-6. **Git commit 风格**：用 conventional commits（feat: / fix: / chore: / docs:）
-7. **测试**：核心 service 写单元测试。AI 调用用 mock。不要追求 100% 覆盖率，关键路径覆盖即可。
+6. **Git commit 风格**：conventional commits（feat: / fix: / chore: / docs:）
+7. **测试**：核心 service 写单元测试。AI / 爬虫 / Telegram 调用用 mock。不追求 100% 覆盖率，关键路径覆盖即可。
 8. **不要用过时模式**：
    - 不用 `requirements.txt`，用 `pyproject.toml`
-   - 不用同步 SQLAlchemy 1.x，用 2.0 async 模式
+   - 不用同步 SQLAlchemy 1.x，用 2.0 async
    - 不用 `print`，用 `logging`
-   - 不用 `os.getenv` 散落各处，配置统一过 pydantic-settings
+   - 不用 `os.getenv` 散落各处，配置走 pydantic-settings
+9. **爬虫永远是脆弱环节**。任何爬虫代码必须有 try/except、有重试、有失败告警，不能让 worker 进程因为爬虫挂了整个崩。
+10. **AI 调用永远走 `ai/client.py` 封装**，不要在 service 里裸调 `openai.chat.completions.create`。这样换模型、加日志、做缓存都只改一处。
 
 ---
 
 ## 11. 当前状态
 
-**开发者已准备好**：
-- Telegram Bot Token（会在本地 .env 配置）
-- Anthropic API Key（同上）
-- Telegram User ID（同上）
-- AWS EC2 服务器（具体情况待开发者补充）
+**已完成**（Stage 0 热身）：
+- Python 3.12.13（uv 管理，避开 3.14 的 PTB 兼容问题）
+- uv + pyproject.toml + .venv 项目骨架
+- python-telegram-bot 21.11.1 + python-dotenv 已装
+- 最简 echo bot 跑通（用 polling 模式）
+- `.env` 机制（PYTHONUTF8、TELEGRAM_BOT_TOKEN）
+- `.gitignore` 含 `.idea/`、`.venv/`、`.env`
+- 首个 commit 已提交
 
-**第一步**：从阶段 1 开始，初始化项目骨架。
+**开发者已准备好 / 待准备**：
+- ✅ Telegram Bot Token
+- ✅ Telegram User ID（自己当 admin）
+- ⬜ OpenAI API Key（开发者承诺去充值，进 Stage 3 前准备）
+- ⬜ X 爬虫小号（进 Stage 1 前注册，**不要用日常 X 账号**）
+- ✅ AWS EC2 悉尼区服务器
+- ⬜ 备用：家里那台废笔记本，新西兰住宅 IP，万一 EC2 被 X 风控用
+
+**下一步**：进入 Stage 1，做 X 爬虫 spike，验证可行性。
 
 ---
 
