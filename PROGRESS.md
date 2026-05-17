@@ -8,7 +8,7 @@
 
 **项目已转型** —— 从英语学习 bot 改为 **Daily X Digest Bot**，每日 NZ 20:00 自动总结 X 博主 @李老师不是你老师 的当日推文，推给经管理员审批的订阅者。详细需求看 `PROJECT_BRIEF.md`。
 
-**当前阶段**：Stage 4 已完成（订阅状态机 + 用户命令 + 管理员审批命令），准备进 **Stage 5（每日推送 + 调度 + 部署）**。
+**当前阶段**：Stage 5 已完成（每日推送 + 调度 + Docker 生产部署 + GitHub Actions CI/CD），等待生产 `/test_push` 验证和 24 小时观察。
 
 ### 工作模式
 - **Claude 直接写代码**（2026-05-16 改的：之前是"教不写"，开发者觉得自己敲效率太低）。开发者看不懂会主动问。
@@ -64,6 +64,11 @@
   - `/revoke` 做 `enabled=False` 软撤销，保留管理员撤销痕迹；用户之后仍可重新 `/subscribe` 走审批。
   - 审批动作先落库，再通知用户。通知失败不回滚状态，只向管理员提示并写日志。
   - 已按"一个功能点一个 commit"执行：service、user commands、admin commands、docs 分别提交。
+- **2026-05-18 Stage 5 部署决策**：
+  - 生产用 Docker Compose 托管 `postgres`、`migrate`、`bot`、`worker` 四个服务；migration 作为一次性服务在 bot/worker 前执行。
+  - GitHub Actions 负责 CI 和手动生产部署，不在 EC2 上手工改代码当正式流程。
+  - Actions 把当前 commit 打包上传到 EC2 的 `releases/<sha>`，共享密钥只放 `shared/.env`，`current` 指向最近部署版本。
+  - Compose 顶层项目名固定为 `daily-x-digest`，避免和服务器上已有项目的默认 `deploy` 项目名混淆。
 
 ---
 
@@ -129,16 +134,26 @@
 | 4.3 管理员命令 | ✅ | `/pending` `/approve` `/deny` `/revoke` `/subscribers` 接真实业务；审批后通知申请人 |
 | 4.4 本地验证 | ✅ | 用测试 user_id 跑通申请→批准→取消、申请→拒绝、申请→批准→撤销→重新申请 |
 
-### Stage 5 ⬜ 未开始
+### Stage 5：每日推送 + 调度 + 部署 ✅ 已完成
 
-见 `PROJECT_BRIEF.md` 第 7 节。
+| 子任务 | 状态 | 备注 |
+|--------|------|------|
+| 5.1 `services/push.py` 广播 | ✅ | 遍历 enabled subscribers，记录 `push_history`，连续 3 次失败自动禁用 |
+| 5.2 NZ 19:30/20:00 调度 | ✅ | 19:30 预生成 digest，20:00 推送；失败通知 admin |
+| 5.3 `/test_push` | ✅ | 只推给管理员，用于部署后端到端验证 |
+| 5.4 `/broadcast` | ✅ | 管理员公告推送给所有 enabled subscribers |
+| 5.5 `/cost` | ✅ | 查看近 N 天 OpenAI 成本 |
+| 5.6 Docker 生产配置 | ✅ | Dockerfile + `deploy/docker-compose.prod.yml`，bot/worker/migrate/postgres 四服务 |
+| 5.7 GitHub Actions CI/CD | ✅ | PR/main 跑 CI，手动 dispatch 部署到 EC2 |
+| 5.8 README / `.env.example` | ✅ | 本地运行、生产部署、验证步骤已补齐 |
 
 ---
 
 ## 待开发者补充
 
 - ✅ OpenAI API Key（已充值 + 配置）
-- ⬜ 家里废笔记本环境（Stage 1.4/1.5 EC2 IP 被 X 风控时启用）
+- ✅ GitHub Actions repo secrets / variables（EC2、Telegram、OpenAI、X cookies、Postgres）
+- ⏸️ 家里废笔记本环境（EC2 IP 被 X 风控时启用）
 
 ## 阻塞项
 
@@ -148,21 +163,17 @@
 
 ## 上次对话结尾状态
 
-2026-05-17（Stage 4 完成，当前分支 `feature/stage-4-subscription-flow`）：
-- **Stage 4 全部完成**：
-  - 新增 `src/services/subscription.py` 统一处理订阅状态机。
-  - `/subscribe`：写入 `pending_requests`，通知管理员。
-  - `/unsubscribe`：用户主动取消订阅，硬删除 subscriber 行。
-  - `/status`：显示未申请 / 待审批 / 已订阅 / 已拒绝。
-  - `/pending` `/approve` `/deny` `/revoke` `/subscribers`：管理员审批流已接真实业务。
-- **验证已通过**：
+2026-05-18（Stage 5 完成，当前分支 `feature/stage-5-daily-push-deploy`）：
+- **Stage 5 全部代码和部署配置已完成**：
+  - `src/services/push.py`：每日 digest 广播、公告广播、push_history、失败自动禁用。
+  - `src/scheduler/jobs.py`：NZ 19:30 生成 digest，NZ 20:00 推送。
+  - 管理员命令：`/test_push`、`/broadcast`、`/cost`。
+  - 生产部署：Dockerfile、Compose、GitHub Actions CI/CD、README、`.env.example`。
+- **本地验证已通过**：
   - `uv run python -m compileall src`
-  - 用测试 user_id 跑通 DB 状态机全流程，测试数据已清理。
-  - `build_application()` 正常构建，handler 数量仍为 11。
-- **本地开发要同时跑的 3 件事**（不变）：
-  1. `docker compose up -d`（Postgres）
-  2. `uv run python -m src.main`（bot polling）
-  3. `uv run python -m src.worker`（scheduler，每小时 :05 抓一次）
-- **下次对话第一步：进入 Stage 5**（每日推送 + 调度 + 部署）
-  - 先开 `feature/stage-5-daily-push-deploy` 分支。
-  - Stage 5 内容见 `PROJECT_BRIEF.md` 第 7 节：`services/push.py`、NZ 20:00 推送任务、`/test_push`、`/broadcast`、生产部署配置。
+  - `uv run alembic upgrade head`
+  - `build_application()` 正常构建
+  - `build_scheduler()` 正常注册 3 个 job
+  - `docker compose -f deploy/docker-compose.prod.yml config --quiet`
+  - `docker build -t daily-x-digest-bot:stage5-local .`
+- **下一步**：merge 到 `main` 后触发 GitHub Actions 手动部署，部署完成后在 Telegram 发 `/test_push` 做生产端到端验证。

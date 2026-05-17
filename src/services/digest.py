@@ -167,6 +167,70 @@ async def generate_digest(
     )
 
 
+async def load_digest(
+    screen_name: str,
+    target_date: date | None = None,
+) -> DigestPackage | None:
+    """从 daily_digests 读取已生成的 digest。
+
+    用途：19:30 生成 digest，20:00 推送时复用，避免重复 AI 调用。
+    返回 None 表示当天还没有生成过。
+    """
+    tz = ZoneInfo(settings.TIMEZONE)
+    if target_date is None:
+        target_date = datetime.now(tz).date()
+
+    async with async_session() as session:
+        author = await _get_author(session, screen_name)
+        if author is None:
+            return None
+
+        stmt = select(DailyDigest).where(
+            DailyDigest.digest_date == target_date,
+            DailyDigest.author_id == author.id,
+        )
+        row = (await session.execute(stmt)).scalar_one_or_none()
+        if row is None:
+            return None
+
+        featured = None
+        if row.featured_tweet_id is not None:
+            featured = await session.get(Tweet, row.featured_tweet_id)
+
+        other_ids = row.other_tweet_ids or []
+        others_by_id: dict[int, Tweet] = {}
+        if other_ids:
+            tweets_stmt = select(Tweet).where(Tweet.id.in_(other_ids))
+            tweets = (await session.execute(tweets_stmt)).scalars().all()
+            others_by_id = {t.id: t for t in tweets}
+
+        summary_map = {
+            int(tweet_id): summary_text
+            for tweet_id, summary_text in (row.summary_per_tweet or {}).items()
+        }
+
+        return DigestPackage(
+            digest_date=target_date,
+            author_screen_name=screen_name,
+            featured=featured,
+            others=[others_by_id[i] for i in other_ids if i in others_by_id],
+            summary_per_tweet=summary_map,
+            overall_takeaway=row.overall_takeaway,
+            digest_id=row.id,
+        )
+
+
+async def get_or_generate_digest(
+    screen_name: str,
+    target_date: date | None = None,
+) -> DigestPackage:
+    """优先复用已生成 digest，不存在时再生成。"""
+    loaded = await load_digest(screen_name, target_date)
+    if loaded is not None:
+        return loaded
+    return await generate_digest(screen_name, target_date)
+
+
 # ===================== 辅助 =====================
 
 def _empty_package(d: date, screen_name: str) -> DigestPackage:

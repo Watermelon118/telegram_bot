@@ -3,6 +3,7 @@
 所有命令通过 @require_role(Role.ADMIN) 限制。
 - /pending /approve /deny /revoke /subscribers：订阅审批流
 - /test_digest：Stage 3 接业务，手动触发当日 digest 推给管理员自己
+- /test_push /broadcast：Stage 5 推送验证和管理员公告
 """
 
 import logging
@@ -15,7 +16,9 @@ from telegram.ext import ContextTypes
 from src.bot.handlers._digest_render import send_digest_to_chat
 from src.bot.middleware import Role, require_role
 from src.config import settings
+from src.services import cost as cost_service
 from src.services import digest as digest_service
+from src.services import push as push_service
 from src.services import subscription
 from src.services.subscription import (
     ApproveResult,
@@ -182,6 +185,71 @@ async def test_digest(
     await send_digest_to_chat(context.bot, chat_id, package)
 
 
+@require_role(Role.ADMIN)
+async def test_push(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """手动触发一次今日推送，只发给管理员。"""
+    if update.message is None:
+        return
+
+    await update.message.reply_text("正在执行 test push，请稍候...")
+    try:
+        result = await push_service.send_test_digest_to_admin(context.bot)
+    except Exception as e:
+        logger.exception("test_push failed")
+        await update.message.reply_text(f"test push 失败：{e}")
+        return
+
+    await update.message.reply_text(
+        "test push 完成："
+        f"成功 {result.succeeded}，失败 {result.failed}。"
+    )
+
+
+@require_role(Role.ADMIN)
+async def broadcast(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """向所有订阅者广播一条管理员公告。"""
+    if update.message is None:
+        return
+
+    text = " ".join(context.args or []).strip()
+    if not text:
+        await update.message.reply_text("用法：/broadcast <消息>")
+        return
+
+    await update.message.reply_text("正在广播，请稍候...")
+    result = await push_service.broadcast_message(context.bot, text)
+    await update.message.reply_text(
+        "广播完成："
+        f"总数 {result.total}，成功 {result.succeeded}，"
+        f"失败 {result.failed}，禁用 {result.disabled}。"
+    )
+
+
+@require_role(Role.ADMIN)
+async def cost(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """查看近 N 天 OpenAI 调用成本。"""
+    if update.message is None:
+        return
+
+    days = _parse_days(context)
+    if days is None:
+        await update.message.reply_text("用法：/cost [days]，例如 /cost 7")
+        return
+
+    summary = await cost_service.summarize_ai_cost(days)
+    await update.message.reply_text(
+        f"近 {summary.days} 天 AI 成本：\n"
+        f"调用次数：{summary.call_count}\n"
+        f"输入 tokens：{summary.input_tokens:,}\n"
+        f"输出 tokens：{summary.output_tokens:,}\n"
+        f"成本：${summary.cost_usd:.6f} USD"
+    )
+
+
 def _parse_user_id(context: ContextTypes.DEFAULT_TYPE) -> int | None:
     if not context.args:
         return None
@@ -196,6 +264,18 @@ def _parse_reason(context: ContextTypes.DEFAULT_TYPE) -> str | None:
         return None
     reason = " ".join(context.args[1:]).strip()
     return reason or None
+
+
+def _parse_days(context: ContextTypes.DEFAULT_TYPE) -> int | None:
+    if not context.args:
+        return 7
+    try:
+        days = int(context.args[0])
+    except ValueError:
+        return None
+    if days <= 0 or days > 365:
+        return None
+    return days
 
 
 async def _notify_user(
