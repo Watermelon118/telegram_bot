@@ -3,6 +3,7 @@
 所有命令通过 @require_role(Role.ADMIN) 限制。
 - /pending /approve /deny /revoke /subscribers：订阅审批流
 - /test_digest：Stage 3 接业务，手动触发当日 digest 推给管理员自己
+- /test_push /broadcast：Stage 5 推送验证和管理员公告
 """
 
 import logging
@@ -16,6 +17,7 @@ from src.bot.handlers._digest_render import send_digest_to_chat
 from src.bot.middleware import Role, require_role
 from src.config import settings
 from src.services import digest as digest_service
+from src.services import push as push_service
 from src.services import subscription
 from src.services.subscription import (
     ApproveResult,
@@ -180,6 +182,50 @@ async def test_digest(
         return
 
     await send_digest_to_chat(context.bot, chat_id, package)
+
+
+@require_role(Role.ADMIN)
+async def test_push(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """手动触发一次今日推送，只发给管理员。"""
+    if update.message is None:
+        return
+
+    await update.message.reply_text("正在执行 test push，请稍候...")
+    try:
+        result = await push_service.send_test_digest_to_admin(context.bot)
+    except Exception as e:
+        logger.exception("test_push failed")
+        await update.message.reply_text(f"test push 失败：{e}")
+        return
+
+    await update.message.reply_text(
+        "test push 完成："
+        f"成功 {result.succeeded}，失败 {result.failed}。"
+    )
+
+
+@require_role(Role.ADMIN)
+async def broadcast(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """向所有订阅者广播一条管理员公告。"""
+    if update.message is None:
+        return
+
+    text = " ".join(context.args or []).strip()
+    if not text:
+        await update.message.reply_text("用法：/broadcast <消息>")
+        return
+
+    await update.message.reply_text("正在广播，请稍候...")
+    result = await push_service.broadcast_message(context.bot, text)
+    await update.message.reply_text(
+        "广播完成："
+        f"总数 {result.total}，成功 {result.succeeded}，"
+        f"失败 {result.failed}，禁用 {result.disabled}。"
+    )
 
 
 def _parse_user_id(context: ContextTypes.DEFAULT_TYPE) -> int | None:
