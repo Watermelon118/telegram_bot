@@ -70,6 +70,7 @@
   - Actions 把当前 commit 打包上传到 EC2 的 `releases/<sha>`，共享密钥只放 `shared/.env`，`current` 指向最近部署版本。
   - Compose 顶层项目名固定为 `daily-x-digest`，避免和服务器上已有项目的默认 `deploy` 项目名混淆。
   - 生产日志必须过滤 secrets；`httpx` INFO 会打印 Telegram API 完整 URL，里面包含 bot token，因此生产默认把 `httpx/httpcore` 降到 WARNING，并加全局脱敏 filter。
+  - Playwright `channel=chrome` 只用于 Windows 本地兜底；Linux Docker 生产必须留空，使用镜像内安装的 bundled Chromium。
 
 ---
 
