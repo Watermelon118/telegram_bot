@@ -1,0 +1,73 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: daily-x-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}"
+      POSTGRES_DB: x_digest
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    volumes:
+      - daily_x_postgres_data:/var/lib/postgresql/data
+    networks:
+      - daily_x_backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d x_digest"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  migrate:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: daily-x-digest-bot:${RELEASE_SHA:-local}
+    restart: "no"
+    env_file:
+      - ../.env
+    command: ["uv", "run", "alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - daily_x_backend
+
+  bot:
+    image: daily-x-digest-bot:${RELEASE_SHA:-local}
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: daily-x-bot
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    command: ["uv", "run", "python", "-m", "src.main"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - daily_x_backend
+
+  worker:
+    image: daily-x-digest-bot:${RELEASE_SHA:-local}
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: daily-x-worker
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    command: ["uv", "run", "python", "-m", "src.worker"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - daily_x_backend
+
+networks:
+  daily_x_backend:
+
+volumes:
+  daily_x_postgres_data:
