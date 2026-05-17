@@ -1,18 +1,25 @@
 """用户面 Telegram handler。
 
 - /start：欢迎语
-- /subscribe：申请订阅（Stage 4 接管，现在占位）
-- /unsubscribe：取消订阅（同上）
-- /status：查询自己角色
+- /subscribe：申请订阅，通知管理员审批
+- /unsubscribe：取消订阅
+- /status：查询自己订阅状态
 - 未知命令兜底
 """
 
 import logging
 
-from telegram import Update
+from telegram import Update, User
 from telegram.ext import ContextTypes
 
-from src.bot.middleware import get_user_role
+from src.config import settings
+from src.services import subscription
+from src.services.subscription import (
+    SubscribeResult,
+    SubscriptionStatus,
+    TelegramUserProfile,
+    UnsubscribeResult,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -32,30 +39,59 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """申请订阅 —— Stage 4 接管。"""
-    if update.message is None:
+    """申请订阅。新申请写 pending_requests，并通知管理员。"""
+    if update.message is None or update.effective_user is None:
         return
-    await update.message.reply_text(
-        "Subscription flow not yet implemented (Stage 4)."
-    )
+
+    if settings.ADMIN_USER_ID is None:
+        logger.error("ADMIN_USER_ID is not configured; cannot accept request")
+        await update.message.reply_text("系统暂时未配置管理员，无法提交申请。")
+        return
+
+    profile = _to_profile(update.effective_user)
+    outcome = await subscription.request_subscription(profile)
+
+    if outcome.result == SubscribeResult.SUBMITTED:
+        await update.message.reply_text("订阅申请已提交，请等待管理员审批。")
+        await _notify_admin_about_request(context, profile)
+        return
+
+    if outcome.result == SubscribeResult.ALREADY_PENDING:
+        await update.message.reply_text("你的订阅申请已经在等待审批中。")
+        return
+
+    if outcome.result == SubscribeResult.ALREADY_SUBSCRIBED:
+        await update.message.reply_text("你已经是订阅者。")
+        return
+
+    reason = f"\n原因：{outcome.denied_reason}" if outcome.denied_reason else ""
+    await update.message.reply_text(f"你的订阅申请此前已被拒绝。{reason}")
 
 
 async def unsubscribe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """取消订阅 —— Stage 4 接管。"""
-    if update.message is None:
+    """取消订阅。按隐私要求从 subscribers 表硬删除。"""
+    if update.message is None or update.effective_user is None:
         return
-    await update.message.reply_text(
-        "Unsubscribe not yet implemented (Stage 4)."
-    )
+
+    result = await subscription.unsubscribe(update.effective_user.id)
+    if result == UnsubscribeResult.UNSUBSCRIBED:
+        await update.message.reply_text("已取消订阅。")
+        return
+
+    await update.message.reply_text("你当前没有订阅。")
 
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """查询自己角色。"""
+    """查询自己的订阅状态。"""
     user = update.effective_user
     if user is None or update.message is None:
         return
-    role = await get_user_role(user.id)
-    await update.message.reply_text(f"你当前角色：{role.value}")
+
+    status_info = await subscription.get_subscription_status(user.id)
+    text = _format_status(status_info.status, status_info.denied_reason)
+    if settings.ADMIN_USER_ID == user.id:
+        text = f"{text}\n\n你也是管理员。"
+    await update.message.reply_text(text)
 
 
 async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -65,3 +101,51 @@ async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "Unknown command. Send /start to see available commands."
     )
+
+
+def _to_profile(user: User) -> TelegramUserProfile:
+    return TelegramUserProfile(
+        user_id=user.id,
+        username=user.username,
+        first_name=user.first_name,
+    )
+
+
+async def _notify_admin_about_request(
+    context: ContextTypes.DEFAULT_TYPE,
+    profile: TelegramUserProfile,
+) -> None:
+    if settings.ADMIN_USER_ID is None:
+        return
+
+    try:
+        await context.bot.send_message(
+            chat_id=settings.ADMIN_USER_ID,
+            text=(
+                "新的订阅申请：\n"
+                f"user_id: {profile.user_id}\n"
+                f"username: {_format_username(profile.username)}\n"
+                f"first_name: {profile.first_name or '-'}\n\n"
+                f"批准：/approve {profile.user_id}\n"
+                f"拒绝：/deny {profile.user_id} 原因"
+            ),
+        )
+    except Exception:
+        logger.exception("failed to notify admin about subscription request")
+
+
+def _format_status(status: SubscriptionStatus, reason: str | None) -> str:
+    if status == SubscriptionStatus.SUBSCRIBED:
+        return "当前状态：已订阅。"
+    if status == SubscriptionStatus.PENDING:
+        return "当前状态：待审批。"
+    if status == SubscriptionStatus.DENIED:
+        suffix = f"\n原因：{reason}" if reason else ""
+        return f"当前状态：已拒绝。{suffix}"
+    return "当前状态：未申请。"
+
+
+def _format_username(username: str | None) -> str:
+    if not username:
+        return "-"
+    return f"@{username}"
