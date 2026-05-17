@@ -10,9 +10,15 @@
 5. UPSERT daily_digests 表
 6. 返回 DigestPackage 给上层（handler / push）
 
+"要闻"段范围（2026-05-17 收紧）：
+- 按"热度（reply+like+view）"排序后取 **第 2-6 名共 5 条**
+- 排名 7+ 的不进 digest（不摘要、不入库 other_tweet_ids、不展示）
+- 理由：用户只关心热度高的，AI 调用成本也从 ~20 次砍到 6 次
+
 边界情况：
 - 当日 0 条推：返回 empty package，不落库（无意义）
 - 当日 1 条推：那条就是头条，不跑 AI（省钱），不落 summary/takeaway
+- 当日 2-6 条推：全部 -1（除头条外）进要闻
 - AI 部分失败：summary 单条失败用占位串；takeaway 整体失败用占位串。不抛
 """
 
@@ -31,6 +37,10 @@ from src.db.session import async_session
 from src.services import summary
 
 logger = logging.getLogger(__name__)
+
+# "今日要闻"段最多展示 N 条（按热度排名 2 到 N+1）。
+# 热度 = reply + like + view。排名超 N+1 的丢弃。
+_BRIEFS_MAX_COUNT = 5
 
 
 @dataclass
@@ -88,15 +98,17 @@ async def generate_digest(
     if not tweets:
         return _empty_package(target_date, screen_name)
 
-    # 选头条：reply + like + view 之和最大
-    featured = max(
-        tweets,
-        key=lambda t: (t.reply_count or 0) + (t.like_count or 0) + (t.view_count or 0),
-    )
-    others = sorted(
-        (t for t in tweets if t.id != featured.id),
-        key=lambda t: t.posted_at,
-        reverse=True,
+    # 按热度排序（reply + like + view）→ 第 1 名头条，第 2 到 _BRIEFS_MAX_COUNT+1 名进要闻
+    def _score(t: Tweet) -> int:
+        return (t.reply_count or 0) + (t.like_count or 0) + (t.view_count or 0)
+
+    by_heat = sorted(tweets, key=_score, reverse=True)
+    featured = by_heat[0]
+    others = by_heat[1 : 1 + _BRIEFS_MAX_COUNT]
+    logger.info(
+        "digest selection: featured=%d (score=%d), briefs=%d (of %d total tweets, dropped %d cold ones)",
+        featured.id, _score(featured), len(others), len(tweets),
+        max(0, len(tweets) - 1 - _BRIEFS_MAX_COUNT),
     )
 
     # 单条推：跳过 AI，省钱
