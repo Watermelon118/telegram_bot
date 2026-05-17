@@ -119,10 +119,12 @@ jobs:
       X_SCRAPER_USERNAME: ${{ secrets.X_SCRAPER_USERNAME }}
       X_SCRAPER_COOKIES: ${{ secrets.X_SCRAPER_COOKIES }}
       POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
-      REPOSITORY: ${{ github.repository }}
       RELEASE_SHA: ${{ github.sha }}
 
     steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
       - name: Validate deployment settings
         run: |
           : "${EC2_HOST:?Set repository variable EC2_HOST, for example 32.236.1.70}"
@@ -143,24 +145,24 @@ jobs:
           chmod 600 ~/.ssh/ec2_key
           ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts
 
-      - name: Check out release on EC2
+      - name: Create release archive
         run: |
-          ssh -i ~/.ssh/ec2_key "$EC2_USER@$EC2_HOST" "
-            set -euo pipefail
-            mkdir -p '$DEPLOY_DIR'
-            if [ ! -d '$DEPLOY_DIR/.git' ]; then
-              git clone 'https://github.com/$REPOSITORY.git' '$DEPLOY_DIR'
-            fi
-            cd '$DEPLOY_DIR'
-            git fetch origin main
-            git checkout --force '$RELEASE_SHA'
-          "
+          tar --exclude-vcs --exclude='./.env' -czf "$RUNNER_TEMP/daily-x-release.tgz" .
 
-      - name: Verify production compose exists
+      - name: Upload release to EC2
         run: |
           ssh -i ~/.ssh/ec2_key "$EC2_USER@$EC2_HOST" "
             set -euo pipefail
-            cd '$DEPLOY_DIR'
+            mkdir -p '$DEPLOY_DIR/releases' '$DEPLOY_DIR/shared'
+            rm -rf '$DEPLOY_DIR/releases/$RELEASE_SHA'
+            mkdir -p '$DEPLOY_DIR/releases/$RELEASE_SHA'
+          "
+          scp -i ~/.ssh/ec2_key "$RUNNER_TEMP/daily-x-release.tgz" "$EC2_USER@$EC2_HOST:$DEPLOY_DIR/releases/$RELEASE_SHA/release.tgz"
+          ssh -i ~/.ssh/ec2_key "$EC2_USER@$EC2_HOST" "
+            set -euo pipefail
+            cd '$DEPLOY_DIR/releases/$RELEASE_SHA'
+            tar -xzf release.tgz
+            rm release.tgz
             if [ ! -f deploy/docker-compose.prod.yml ]; then
               echo 'deploy/docker-compose.prod.yml is not ready yet. Finish Stage 5 production Docker Compose before enabling deployment.'
               exit 1
@@ -169,6 +171,13 @@ jobs:
 
       - name: Write production environment file
         run: |
+          DATABASE_PASSWORD_URLENCODED="$(python - <<'PY'
+          import os
+          from urllib.parse import quote
+
+          print(quote(os.environ["POSTGRES_PASSWORD"], safe=""))
+          PY
+          )"
           cat > production.env <<EOF
           TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
           ADMIN_USER_ID=${ADMIN_USER_ID}
@@ -178,7 +187,7 @@ jobs:
           POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
           RELEASE_SHA=${RELEASE_SHA}
           TRACKED_X_AUTHOR=whyyoutouzhele
-          DATABASE_URL=postgresql+asyncpg://postgres:${POSTGRES_PASSWORD}@postgres:5432/x_digest
+          DATABASE_URL=postgresql+asyncpg://postgres:${DATABASE_PASSWORD_URLENCODED}@postgres:5432/x_digest
           BOT_MODE=polling
           TIMEZONE=Pacific/Auckland
           PUSH_TIME=20:00
@@ -192,14 +201,20 @@ jobs:
           MODEL_FEATURED_ANALYSIS=gpt-4o
           EOF
           sed -i 's/^          //' production.env
-          scp -i ~/.ssh/ec2_key production.env "$EC2_USER@$EC2_HOST:$DEPLOY_DIR/.env"
-          ssh -i ~/.ssh/ec2_key "$EC2_USER@$EC2_HOST" "chmod 600 '$DEPLOY_DIR/.env'"
+          scp -i ~/.ssh/ec2_key production.env "$EC2_USER@$EC2_HOST:$DEPLOY_DIR/shared/.env"
+          ssh -i ~/.ssh/ec2_key "$EC2_USER@$EC2_HOST" "
+            set -euo pipefail
+            chmod 600 '$DEPLOY_DIR/shared/.env'
+            ln -sfn '$DEPLOY_DIR/shared/.env' '$DEPLOY_DIR/releases/$RELEASE_SHA/.env'
+          "
 
       - name: Deploy with Docker Compose
         run: |
           ssh -i ~/.ssh/ec2_key "$EC2_USER@$EC2_HOST" "
             set -euo pipefail
-            cd '$DEPLOY_DIR'
+            cd '$DEPLOY_DIR/releases/$RELEASE_SHA'
+            docker compose --env-file .env -f deploy/docker-compose.prod.yml config --quiet
             docker compose --env-file .env -f deploy/docker-compose.prod.yml up -d --build
+            ln -sfn '$DEPLOY_DIR/releases/$RELEASE_SHA' '$DEPLOY_DIR/current'
             docker compose --env-file .env -f deploy/docker-compose.prod.yml ps
           "
