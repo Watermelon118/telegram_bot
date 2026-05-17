@@ -21,6 +21,10 @@ Runtime is split into two long-running processes:
 - `src.main`: Telegram bot polling and admin/user commands.
 - `src.worker`: APScheduler jobs for scraping, pre-generating the digest, and daily push.
 
+On Windows, if antivirus removes Playwright's bundled Chromium, set
+`PLAYWRIGHT_BROWSER_CHANNEL=chrome` in `.env` to use the installed system
+Chrome. Leave it empty in Linux Docker production.
+
 ## Local Development
 
 1. Copy `.env.example` to `.env` and fill the real values.
@@ -109,6 +113,8 @@ docker compose --env-file .env -f deploy/docker-compose.prod.yml ps
 
 - X scraping can fail because of account, cookies, or IP risk control. Refresh
   `X_SCRAPER_COOKIES` first; move to a residential IP fallback if EC2 is blocked.
+- `PLAYWRIGHT_BROWSER_CHANNEL` should stay empty in Docker production. It is only
+  for local Windows fallback to system Chrome or Edge.
 - Telegram users who block the bot will fail pushes. After three consecutive
   failures the subscriber is disabled automatically.
 - OpenAI model prices can change. The current cost accounting uses the price

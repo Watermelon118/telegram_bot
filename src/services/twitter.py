@@ -54,13 +54,12 @@ class TwitterScraper:
 
     async def __aenter__(self) -> Self:
         self._playwright = await async_playwright().start()
-        # Windows 开发用系统 Chrome 避免 AV 删 Chromium；
-        # Linux 上不传 channel，用 Playwright bundled Chromium。
-        # TODO Stage 5：通过 env 区分 dev/prod
-        self._browser = await self._playwright.chromium.launch(
-            headless=True,
-            channel="chrome",
-        )
+        launch_options: dict[str, Any] = {"headless": True}
+        if settings.PLAYWRIGHT_BROWSER_CHANNEL:
+            # Windows 本地如遇杀毒软件删除 bundled Chromium，可显式设为 chrome/msedge。
+            # Linux Docker 生产不传 channel，使用镜像内安装的 Playwright Chromium。
+            launch_options["channel"] = settings.PLAYWRIGHT_BROWSER_CHANNEL
+        self._browser = await self._playwright.chromium.launch(**launch_options)
         cookies = parse_cookies(settings.X_SCRAPER_COOKIES)
         self._context = await self._browser.new_context(
             user_agent=_USER_AGENT,

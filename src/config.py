@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     X_SCRAPER_EMAIL: str = ""
     X_SCRAPER_EMAIL_PASSWORD: str = ""
     TRACKED_X_AUTHOR: str = "whyyoutouzhele"
+    PLAYWRIGHT_BROWSER_CHANNEL: str = ""
 
     # 数据库，Stage 2.4-2.6 接入
     DATABASE_URL: str = (
