@@ -9,7 +9,7 @@ import logging
 
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 
-from src.bot.handlers.user import echo, start
+from src.bot.handlers import admin, user
 from src.config import settings
 
 logger = logging.getLogger(__name__)
@@ -19,10 +19,23 @@ def build_application() -> Application:
     """根据 config 造一个注册好 handler 的 PTB Application。"""
     app = Application.builder().token(settings.TELEGRAM_BOT_TOKEN).build()
 
-    # /start 命令
-    app.add_handler(CommandHandler("start", start))
-    # 任意非命令文本消息走 echo
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
+    # ===== 用户命令 =====
+    app.add_handler(CommandHandler("start", user.start))
+    app.add_handler(CommandHandler("subscribe", user.subscribe))
+    app.add_handler(CommandHandler("unsubscribe", user.unsubscribe))
+    app.add_handler(CommandHandler("status", user.status))
 
-    logger.info("Application built with %d handler(s)", len(app.handlers[0]))
+    # ===== 管理员命令（require_role(ADMIN) 在 handler 内部检查）=====
+    app.add_handler(CommandHandler("pending", admin.pending))
+    app.add_handler(CommandHandler("approve", admin.approve))
+    app.add_handler(CommandHandler("deny", admin.deny))
+    app.add_handler(CommandHandler("revoke", admin.revoke))
+    app.add_handler(CommandHandler("subscribers", admin.subscribers_list))
+
+    # ===== 未知命令兜底（必须放最后）=====
+    app.add_handler(MessageHandler(filters.COMMAND, user.unknown))
+
+    logger.info(
+        "Application built with %d handler(s)", len(app.handlers[0])
+    )
     return app
