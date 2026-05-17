@@ -1,0 +1,205 @@
+name: CI/CD
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      deploy_to_ec2:
+        description: "Run the EC2 deployment job after CI passes"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: CI
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: x_digest
+          POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d x_digest"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
+      TELEGRAM_BOT_TOKEN: "123456789:ci_dummy_token_for_import_checks"
+      ADMIN_USER_ID: "1"
+      OPENAI_API_KEY: "ci_dummy_openai_key"
+      X_SCRAPER_USERNAME: "ci"
+      X_SCRAPER_COOKIES: "auth_token=ci; ct0=ci"
+      TRACKED_X_AUTHOR: "whyyoutouzhele"
+      DATABASE_URL: "postgresql+asyncpg://postgres:postgres@localhost:5432/x_digest"
+      BOT_MODE: "polling"
+      TIMEZONE: "Pacific/Auckland"
+      PUSH_TIME: "20:00"
+      LOG_LEVEL: "INFO"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: python -m pip install --upgrade uv
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Compile Python modules
+        run: uv run python -m compileall src
+
+      - name: Apply database migrations
+        run: uv run alembic upgrade head
+
+      - name: Build Telegram application
+        run: |
+          uv run python - <<'PY'
+          from src.bot.app import build_application
+
+          app = build_application()
+          print(f"registered_handlers={len(app.handlers[0])}")
+          PY
+
+      - name: Run unit tests when present
+        run: |
+          if [ -d tests ]; then
+            uv run python -m unittest discover -s tests
+          else
+            echo "No tests directory yet; compile/import/migration checks passed."
+          fi
+
+  deploy:
+    name: Deploy to EC2
+    runs-on: ubuntu-latest
+    needs: ci
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_to_ec2 == true }}
+    environment: production
+    concurrency:
+      group: production-ec2
+      cancel-in-progress: false
+
+    env:
+      EC2_HOST: ${{ vars.EC2_HOST }}
+      EC2_USER: ${{ vars.EC2_USER }}
+      DEPLOY_DIR: ${{ vars.DEPLOY_DIR }}
+      EC2_SSH_PRIVATE_KEY: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      ADMIN_USER_ID: ${{ secrets.ADMIN_USER_ID }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      X_SCRAPER_USERNAME: ${{ secrets.X_SCRAPER_USERNAME }}
+      X_SCRAPER_COOKIES: ${{ secrets.X_SCRAPER_COOKIES }}
+      POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+      REPOSITORY: ${{ github.repository }}
+      RELEASE_SHA: ${{ github.sha }}
+
+    steps:
+      - name: Validate deployment settings
+        run: |
+          : "${EC2_HOST:?Set repository variable EC2_HOST, for example 32.236.1.70}"
+          : "${EC2_USER:?Set repository variable EC2_USER, for example ubuntu}"
+          : "${DEPLOY_DIR:?Set repository variable DEPLOY_DIR, for example /home/ubuntu/apps/daily-x-digest-bot}"
+          : "${EC2_SSH_PRIVATE_KEY:?Set repository secret EC2_SSH_PRIVATE_KEY}"
+          : "${TELEGRAM_BOT_TOKEN:?Set repository secret TELEGRAM_BOT_TOKEN}"
+          : "${ADMIN_USER_ID:?Set repository secret ADMIN_USER_ID}"
+          : "${OPENAI_API_KEY:?Set repository secret OPENAI_API_KEY}"
+          : "${X_SCRAPER_COOKIES:?Set repository secret X_SCRAPER_COOKIES}"
+          : "${POSTGRES_PASSWORD:?Set repository secret POSTGRES_PASSWORD}"
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$EC2_SSH_PRIVATE_KEY" > ~/.ssh/ec2_key
+          chmod 600 ~/.ssh/ec2_key
+          ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts
+
+      - name: Check out release on EC2
+        run: |
+          ssh -i ~/.ssh/ec2_key "$EC2_USER@$EC2_HOST" "
+            set -euo pipefail
+            mkdir -p '$DEPLOY_DIR'
+            if [ ! -d '$DEPLOY_DIR/.git' ]; then
+              git clone 'https://github.com/$REPOSITORY.git' '$DEPLOY_DIR'
+            fi
+            cd '$DEPLOY_DIR'
+            git fetch origin main
+            git checkout --force '$RELEASE_SHA'
+          "
+
+      - name: Verify production compose exists
+        run: |
+          ssh -i ~/.ssh/ec2_key "$EC2_USER@$EC2_HOST" "
+            set -euo pipefail
+            cd '$DEPLOY_DIR'
+            if [ ! -f deploy/docker-compose.prod.yml ]; then
+              echo 'deploy/docker-compose.prod.yml is not ready yet. Finish Stage 5 production Docker Compose before enabling deployment.'
+              exit 1
+            fi
+          "
+
+      - name: Write production environment file
+        run: |
+          cat > production.env <<EOF
+          TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+          ADMIN_USER_ID=${ADMIN_USER_ID}
+          OPENAI_API_KEY=${OPENAI_API_KEY}
+          X_SCRAPER_USERNAME=${X_SCRAPER_USERNAME}
+          X_SCRAPER_COOKIES=${X_SCRAPER_COOKIES}
+          POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+          RELEASE_SHA=${RELEASE_SHA}
+          TRACKED_X_AUTHOR=whyyoutouzhele
+          DATABASE_URL=postgresql+asyncpg://postgres:${POSTGRES_PASSWORD}@postgres:5432/x_digest
+          BOT_MODE=polling
+          TIMEZONE=Pacific/Auckland
+          PUSH_TIME=20:00
+          LOG_LEVEL=INFO
+          PYTHONUTF8=1
+          PYTHONIOENCODING=utf-8
+          LANG=C.UTF-8
+          LC_ALL=C.UTF-8
+          MODEL_PER_TWEET=gpt-4o-mini
+          MODEL_OVERALL=gpt-4o
+          MODEL_FEATURED_ANALYSIS=gpt-4o
+          EOF
+          sed -i 's/^          //' production.env
+          scp -i ~/.ssh/ec2_key production.env "$EC2_USER@$EC2_HOST:$DEPLOY_DIR/.env"
+          ssh -i ~/.ssh/ec2_key "$EC2_USER@$EC2_HOST" "chmod 600 '$DEPLOY_DIR/.env'"
+
+      - name: Deploy with Docker Compose
+        run: |
+          ssh -i ~/.ssh/ec2_key "$EC2_USER@$EC2_HOST" "
+            set -euo pipefail
+            cd '$DEPLOY_DIR'
+            docker compose --env-file .env -f deploy/docker-compose.prod.yml up -d --build
+            docker compose --env-file .env -f deploy/docker-compose.prod.yml ps
+          "
