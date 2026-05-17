@@ -8,7 +8,7 @@
 
 **项目已转型** —— 从英语学习 bot 改为 **Daily X Digest Bot**，每日 NZ 20:00 自动总结 X 博主 @李老师不是你老师 的当日推文，推给经管理员审批的订阅者。详细需求看 `PROJECT_BRIEF.md`。
 
-**当前阶段**：Stage 3 已完成（OpenAI client 封装 + prompts + summary/media/digest service + `/test_digest` 命令），准备进 **Stage 4（订阅管理 + 管理员审批流）**。
+**当前阶段**：Stage 4 已完成（订阅状态机 + 用户命令 + 管理员审批命令），准备进 **Stage 5（每日推送 + 调度 + 部署）**。
 
 ### 工作模式
 - **Claude 直接写代码**（2026-05-16 改的：之前是"教不写"，开发者觉得自己敲效率太低）。开发者看不懂会主动问。
@@ -58,6 +58,12 @@
   - **理由**：①用户体验（一屏看完）②AI 成本（20 次 → 6 次）③整体看点更聚焦（只综合热门话题不被噪声稀释）
   - **实现**：`src/services/digest.py` `_BRIEFS_MAX_COUNT=5` 常量；按 `_score()` 排序后切片 `by_heat[1:6]`。
   - **如何应用**：要改成展示更多/更少，调这个常量即可。
+- **2026-05-17 Stage 4 订阅审批实现决策**：
+  - `src/services/subscription.py` 是订阅状态机唯一入口，handler 不直接写三张订阅表。
+  - `/unsubscribe` 按 brief 6.9 做硬删除，用户主动取消后不保留 subscriber 行。
+  - `/revoke` 做 `enabled=False` 软撤销，保留管理员撤销痕迹；用户之后仍可重新 `/subscribe` 走审批。
+  - 审批动作先落库，再通知用户。通知失败不回滚状态，只向管理员提示并写日志。
+  - 已按"一个功能点一个 commit"执行：service、user commands、admin commands、docs 分别提交。
 
 ---
 
@@ -114,7 +120,16 @@
 - 管理员 `/test_digest` Telegram 端到端测试**通过**（2026-05-17）：head + media + briefs 三段渲染、`sendMediaGroup` 200、所有 AI 调用成功
 - 单次成本 **$0.001687 USD**（5 mini × $0.000043 + 1 4o × $0.001653）
 
-### Stage 4-5 ⬜ 未开始
+### Stage 4：订阅管理 + 管理员审批流 ✅ 已完成
+
+| 子任务 | 状态 | 备注 |
+|--------|------|------|
+| 4.1 subscription state machine | ✅ | `src/services/subscription.py`；申请/批准/拒绝/撤销/取消/状态查询 |
+| 4.2 用户命令 | ✅ | `/subscribe` `/unsubscribe` `/status` 接真实业务；新申请自动通知管理员 |
+| 4.3 管理员命令 | ✅ | `/pending` `/approve` `/deny` `/revoke` `/subscribers` 接真实业务；审批后通知申请人 |
+| 4.4 本地验证 | ✅ | 用测试 user_id 跑通申请→批准→取消、申请→拒绝、申请→批准→撤销→重新申请 |
+
+### Stage 5 ⬜ 未开始
 
 见 `PROJECT_BRIEF.md` 第 7 节。
 
@@ -133,22 +148,21 @@
 
 ## 上次对话结尾状态
 
-2026-05-17（Stage 3 完成 + 已合并 main）：
-- **Stage 3 全部完成**（6 个子任务）+ 端到端 Telegram 验证通过
-- **本次新增的开发流程规范**（沉淀到 `dev-conventions.md` §8）：
-  - 任何新需求开 `feature/<功能名>` 分支开发，测通过后 `--no-ff` merge 回 main，立刻删 feature 分支
-  - 每个子任务一个独立 commit（Stage 3 就是按这个拆的：6 个 feat + 1 docs + 1 refactor）
-  - Stage 3 走通了完整流程：`feature/stage-3-ai-summary-pipeline` → 测试 → merge 进 main → 删分支
-- 项目目前形态：可生成完整 digest 的功能性骨架
-  - `src/ai/`：client（含重试 + 成本追踪）+ prompts 模板
-  - `src/services/`：summary（并发摘要）+ media（下载/cleanup）+ digest（编排 + UPSERT，要闻段限 Top 5）
-  - `src/bot/handlers/`：admin 多了 `/test_digest`；新增 `_digest_render.py` 渲染层（Stage 5 push 复用）
-  - 注册 handler 数量：10 → 11
-  - 新依赖：openai 2.37 + httpx 0.28
+2026-05-17（Stage 4 完成，当前分支 `feature/stage-4-subscription-flow`）：
+- **Stage 4 全部完成**：
+  - 新增 `src/services/subscription.py` 统一处理订阅状态机。
+  - `/subscribe`：写入 `pending_requests`，通知管理员。
+  - `/unsubscribe`：用户主动取消订阅，硬删除 subscriber 行。
+  - `/status`：显示未申请 / 待审批 / 已订阅 / 已拒绝。
+  - `/pending` `/approve` `/deny` `/revoke` `/subscribers`：管理员审批流已接真实业务。
+- **验证已通过**：
+  - `uv run python -m compileall src`
+  - 用测试 user_id 跑通 DB 状态机全流程，测试数据已清理。
+  - `build_application()` 正常构建，handler 数量仍为 11。
 - **本地开发要同时跑的 3 件事**（不变）：
   1. `docker compose up -d`（Postgres）
   2. `uv run python -m src.main`（bot polling）
   3. `uv run python -m src.worker`（scheduler，每小时 :05 抓一次）
-- **下次对话第一步：开 `feature/stage-4-subscription-flow` 分支进 Stage 4**（订阅管理 + 管理员审批）
-  - 当前 worktree 的 feature 分支已合 main 进入待删状态；新 stage 应该用新 worktree / 新 feature 分支
-  - Stage 4 内容见 `PROJECT_BRIEF.md` 第 7 节：subscription state machine、`/subscribe` `/approve` 等
+- **下次对话第一步：进入 Stage 5**（每日推送 + 调度 + 部署）
+  - 先开 `feature/stage-5-daily-push-deploy` 分支。
+  - Stage 5 内容见 `PROJECT_BRIEF.md` 第 7 节：`services/push.py`、NZ 20:00 推送任务、`/test_push`、`/broadcast`、生产部署配置。
