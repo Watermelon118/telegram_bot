@@ -546,18 +546,18 @@ CREATE TABLE ai_call_log (
 
 **交付物**：从一个陌生 Telegram 账号 `/subscribe`，管理员收到通知，`/approve`，对方收到"已批准"。
 
-### Stage 5：每日推送 + 调度 + 部署
+### Stage 5：每日推送 + 调度 + 部署 ✅ 已完成
 **目标**：项目完整，挂着自己跑
 
-- [ ] `services/push.py` 实现广播：遍历 subscribers，按速率限制发头条 + 要闻
-- [ ] `scheduler/jobs.py` 加上 NZ 20:00 推送任务
-- [ ] `/test_push` 命令仅推给管理员，验证全流程
-- [ ] `/broadcast` 临时公告命令
-- [ ] 失败重试 + 错误兜底完善
-- [ ] Dockerfile + docker-compose 生产配置
-- [ ] EC2 部署文档（systemd 起 bot + worker 两个进程）
-- [ ] Webhook 模式 + Nginx + Let's Encrypt 配置示例
-- [ ] README 最终完善（架构图、技术决策说明、部署步骤、成本估算、风险）
+- [x] `services/push.py` 实现广播：遍历 subscribers，按速率限制发头条 + 要闻
+- [x] `scheduler/jobs.py` 加上 NZ 20:00 推送任务
+- [x] `/test_push` 命令仅推给管理员，验证全流程
+- [x] `/broadcast` 临时公告命令
+- [x] 失败重试 + 错误兜底完善
+- [x] Dockerfile + docker-compose 生产配置
+- [x] EC2 部署文档（GitHub Actions + Docker Compose 起 bot + worker）
+- [x] polling 模式生产部署（同一台服务器已有 80/443 项目，webhook 暂不占端口）
+- [x] README 最终完善（架构图、技术决策说明、部署步骤、成本估算、风险）
 
 **交付物**：EC2 上挂着跑，每天 NZ 20:00 收到推送。
 
@@ -648,24 +648,24 @@ PYTHONIOENCODING=utf-8
 
 ## 11. 当前状态
 
-**已完成**（Stage 0 热身）：
-- Python 3.12.13（uv 管理，避开 3.14 的 PTB 兼容问题）
-- uv + pyproject.toml + .venv 项目骨架
-- python-telegram-bot 21.11.1 + python-dotenv 已装
-- 最简 echo bot 跑通（用 polling 模式）
-- `.env` 机制（PYTHONUTF8、TELEGRAM_BOT_TOKEN）
-- `.gitignore` 含 `.idea/`、`.venv/`、`.env`
-- 首个 commit 已提交
+**已完成**（Stage 0-5）：
+- Python 3.12 + uv 项目骨架
+- Playwright + cookies 路线抓取 X 推文
+- PostgreSQL 16 + SQLAlchemy async + Alembic schema
+- Telegram bot 用户订阅、管理员审批、digest 测试命令
+- OpenAI 摘要管线、媒体处理、成本统计
+- 每日 NZ 19:30 生成 digest，NZ 20:00 推送
+- Docker Compose 生产编排 + GitHub Actions CI/CD 部署
 
 **开发者已准备好 / 待准备**：
 - ✅ Telegram Bot Token
 - ✅ Telegram User ID（自己当 admin）
-- ⬜ OpenAI API Key（开发者承诺去充值，进 Stage 3 前准备）
-- ⬜ X 爬虫小号（进 Stage 1 前注册，**不要用日常 X 账号**）
+- ✅ OpenAI API Key
+- ✅ X cookies
 - ✅ AWS EC2 悉尼区服务器
 - ⬜ 备用：家里那台废笔记本，新西兰住宅 IP，万一 EC2 被 X 风控用
 
-**下一步**：进入 Stage 1，做 X 爬虫 spike，验证可行性。
+**下一步**：merge 到 `main` 后触发 GitHub Actions 手动部署；生产部署完成后用 `/test_push` 验证 Telegram 端到端推送。
 
 ---
 

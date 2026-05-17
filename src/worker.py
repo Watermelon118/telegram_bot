@@ -1,4 +1,4 @@
-"""Worker 进程入口：跑爬虫定时任务（未来还会加推送 job）。
+"""Worker 进程入口：跑爬虫、digest 生成、每日推送定时任务。
 
 跟 bot 进程分开运行：
     uv run python -m src.worker
