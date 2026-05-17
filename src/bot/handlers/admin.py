@@ -1,11 +1,13 @@
 """管理员面 Telegram handler。
 
 所有命令通过 @require_role(Role.ADMIN) 限制。
-- /pending /approve /deny /revoke /subscribers：Stage 4 接业务
+- /pending /approve /deny /revoke /subscribers：订阅审批流
 - /test_digest：Stage 3 接业务，手动触发当日 digest 推给管理员自己
 """
 
 import logging
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -14,6 +16,12 @@ from src.bot.handlers._digest_render import send_digest_to_chat
 from src.bot.middleware import Role, require_role
 from src.config import settings
 from src.services import digest as digest_service
+from src.services import subscription
+from src.services.subscription import (
+    ApproveResult,
+    DenyResult,
+    RevokeResult,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -22,28 +30,104 @@ logger = logging.getLogger(__name__)
 async def pending(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.message is None:
         return
-    await update.message.reply_text("/pending: not yet implemented (Stage 4)")
+
+    requests = await subscription.list_pending_requests()
+    if not requests:
+        await update.message.reply_text("当前没有待审批申请。")
+        return
+
+    lines = [f"待审批申请（共 {len(requests)} 个）："]
+    for item in requests:
+        lines.append(
+            "\n"
+            f"user_id: {item.user_id}\n"
+            f"username: {_format_username(item.username)}\n"
+            f"first_name: {item.first_name or '-'}\n"
+            f"requested_at: {_format_datetime(item.requested_at)}\n"
+            f"批准：/approve {item.user_id}\n"
+            f"拒绝：/deny {item.user_id} 原因"
+        )
+    await update.message.reply_text("\n".join(lines))
 
 
 @require_role(Role.ADMIN)
 async def approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.message is None:
+    if update.message is None or update.effective_user is None:
         return
-    await update.message.reply_text("/approve: not yet implemented (Stage 4)")
+
+    user_id = _parse_user_id(context)
+    if user_id is None:
+        await update.message.reply_text("用法：/approve <user_id>")
+        return
+
+    outcome = await subscription.approve_request(
+        user_id=user_id,
+        approved_by=update.effective_user.id,
+    )
+    if outcome.result == ApproveResult.NO_PENDING_REQUEST:
+        await update.message.reply_text("没有找到这个用户的待审批申请。")
+        return
+    if outcome.result == ApproveResult.ALREADY_SUBSCRIBED:
+        await update.message.reply_text("这个用户已经是订阅者。")
+        return
+
+    await update.message.reply_text(f"已批准 user_id={user_id} 的订阅申请。")
+    await _notify_user(
+        context,
+        user_id,
+        "你的订阅申请已通过。之后会收到每日推送。",
+        update,
+    )
 
 
 @require_role(Role.ADMIN)
 async def deny(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.message is None:
         return
-    await update.message.reply_text("/deny: not yet implemented (Stage 4)")
+
+    user_id = _parse_user_id(context)
+    if user_id is None:
+        await update.message.reply_text("用法：/deny <user_id> [原因]")
+        return
+
+    reason = _parse_reason(context)
+    outcome = await subscription.deny_request(user_id=user_id, reason=reason)
+    if outcome.result == DenyResult.NO_PENDING_REQUEST:
+        await update.message.reply_text("没有找到这个用户的待审批申请。")
+        return
+    if outcome.result == DenyResult.ALREADY_SUBSCRIBED:
+        await update.message.reply_text("这个用户已经是订阅者。如需撤销请用 /revoke。")
+        return
+
+    await update.message.reply_text(f"已拒绝 user_id={user_id} 的订阅申请。")
+    user_text = "你的订阅申请未通过。"
+    if reason:
+        user_text = f"{user_text}\n原因：{reason}"
+    await _notify_user(context, user_id, user_text, update)
 
 
 @require_role(Role.ADMIN)
 async def revoke(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.message is None:
         return
-    await update.message.reply_text("/revoke: not yet implemented (Stage 4)")
+
+    user_id = _parse_user_id(context)
+    if user_id is None:
+        await update.message.reply_text("用法：/revoke <user_id>")
+        return
+
+    outcome = await subscription.revoke_subscription(user_id)
+    if outcome.result == RevokeResult.NOT_SUBSCRIBED:
+        await update.message.reply_text("这个用户当前不是有效订阅者。")
+        return
+
+    await update.message.reply_text(f"已撤销 user_id={user_id} 的订阅。")
+    await _notify_user(
+        context,
+        user_id,
+        "你的订阅已被管理员撤销。",
+        update,
+    )
 
 
 @require_role(Role.ADMIN)
@@ -52,9 +136,22 @@ async def subscribers_list(
 ) -> None:
     if update.message is None:
         return
-    await update.message.reply_text(
-        "/subscribers: not yet implemented (Stage 4)"
-    )
+
+    subscribers = await subscription.list_subscribers()
+    if not subscribers:
+        await update.message.reply_text("当前没有订阅者。")
+        return
+
+    lines = [f"当前订阅者（共 {len(subscribers)} 个）："]
+    for item in subscribers:
+        lines.append(
+            "\n"
+            f"user_id: {item.user_id}\n"
+            f"username: {_format_username(item.username)}\n"
+            f"first_name: {item.first_name or '-'}\n"
+            f"approved_at: {_format_datetime(item.approved_at)}"
+        )
+    await update.message.reply_text("\n".join(lines))
 
 
 @require_role(Role.ADMIN)
@@ -83,3 +180,46 @@ async def test_digest(
         return
 
     await send_digest_to_chat(context.bot, chat_id, package)
+
+
+def _parse_user_id(context: ContextTypes.DEFAULT_TYPE) -> int | None:
+    if not context.args:
+        return None
+    try:
+        return int(context.args[0])
+    except ValueError:
+        return None
+
+
+def _parse_reason(context: ContextTypes.DEFAULT_TYPE) -> str | None:
+    if not context.args or len(context.args) < 2:
+        return None
+    reason = " ".join(context.args[1:]).strip()
+    return reason or None
+
+
+async def _notify_user(
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+    text: str,
+    update: Update,
+) -> None:
+    try:
+        await context.bot.send_message(chat_id=user_id, text=text)
+    except Exception:
+        logger.exception("failed to notify user_id=%d", user_id)
+        if update.message is not None:
+            await update.message.reply_text(
+                "状态已更新，但通知用户失败。完整错误已写入日志。"
+            )
+
+
+def _format_username(username: str | None) -> str:
+    if not username:
+        return "-"
+    return f"@{username}"
+
+
+def _format_datetime(value: datetime) -> str:
+    tz = ZoneInfo(settings.TIMEZONE)
+    return value.astimezone(tz).strftime("%Y-%m-%d %H:%M:%S %Z")
