@@ -34,6 +34,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("test_digest", admin.test_digest))
     app.add_handler(CommandHandler("test_push", admin.test_push))
     app.add_handler(CommandHandler("broadcast", admin.broadcast))
+    app.add_handler(CommandHandler("cost", admin.cost))
 
     # ===== 未知命令兜底（必须放最后）=====
     app.add_handler(MessageHandler(filters.COMMAND, user.unknown))

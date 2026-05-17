@@ -16,6 +16,7 @@ from telegram.ext import ContextTypes
 from src.bot.handlers._digest_render import send_digest_to_chat
 from src.bot.middleware import Role, require_role
 from src.config import settings
+from src.services import cost as cost_service
 from src.services import digest as digest_service
 from src.services import push as push_service
 from src.services import subscription
@@ -228,6 +229,27 @@ async def broadcast(
     )
 
 
+@require_role(Role.ADMIN)
+async def cost(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """查看近 N 天 OpenAI 调用成本。"""
+    if update.message is None:
+        return
+
+    days = _parse_days(context)
+    if days is None:
+        await update.message.reply_text("用法：/cost [days]，例如 /cost 7")
+        return
+
+    summary = await cost_service.summarize_ai_cost(days)
+    await update.message.reply_text(
+        f"近 {summary.days} 天 AI 成本：\n"
+        f"调用次数：{summary.call_count}\n"
+        f"输入 tokens：{summary.input_tokens:,}\n"
+        f"输出 tokens：{summary.output_tokens:,}\n"
+        f"成本：${summary.cost_usd:.6f} USD"
+    )
+
+
 def _parse_user_id(context: ContextTypes.DEFAULT_TYPE) -> int | None:
     if not context.args:
         return None
@@ -242,6 +264,18 @@ def _parse_reason(context: ContextTypes.DEFAULT_TYPE) -> str | None:
         return None
     reason = " ".join(context.args[1:]).strip()
     return reason or None
+
+
+def _parse_days(context: ContextTypes.DEFAULT_TYPE) -> int | None:
+    if not context.args:
+        return 7
+    try:
+        days = int(context.args[0])
+    except ValueError:
+        return None
+    if days <= 0 or days > 365:
+        return None
+    return days
 
 
 async def _notify_user(
