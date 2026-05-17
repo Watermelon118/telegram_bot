@@ -10,8 +10,11 @@ from datetime import datetime, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from telegram import Bot
 
 from src.config import settings
+from src.services import digest as digest_service
+from src.services import push as push_service
 from src.services.twitter import TwitterScraper
 
 logger = logging.getLogger(__name__)
@@ -40,6 +43,47 @@ async def scrape_target_job() -> None:
         logger.exception("scrape_target_job failed")
 
 
+async def generate_daily_digest_job() -> None:
+    """每天 NZ 19:30：预生成今日 digest，避免 20:00 推送时等 AI。"""
+    screen_name = settings.TRACKED_X_AUTHOR
+    logger.info("generate_daily_digest_job start: %s", screen_name)
+    try:
+        package = await digest_service.generate_digest(screen_name)
+        logger.info(
+            "generate_daily_digest_job done: digest_id=%s featured=%s briefs=%d",
+            package.digest_id,
+            package.featured.id if package.featured is not None else None,
+            len(package.others),
+        )
+    except Exception as e:
+        logger.exception("generate_daily_digest_job failed")
+        await _notify_admin(f"今日 digest 生成失败：{e}")
+
+
+async def push_daily_digest_job() -> None:
+    """每天 NZ 20:00：推送今日 digest 给所有订阅者。"""
+    logger.info("push_daily_digest_job start")
+    try:
+        bot = Bot(settings.TELEGRAM_BOT_TOKEN)
+        result = await push_service.push_daily_digest_to_subscribers(bot)
+        logger.info(
+            "push_daily_digest_job done: total=%d succeeded=%d failed=%d disabled=%d",
+            result.total,
+            result.succeeded,
+            result.failed,
+            result.disabled,
+        )
+        if result.failed:
+            await _notify_admin(
+                "今日推送完成，但有失败："
+                f"总数 {result.total}，成功 {result.succeeded}，"
+                f"失败 {result.failed}，禁用 {result.disabled}。"
+            )
+    except Exception as e:
+        logger.exception("push_daily_digest_job failed")
+        await _notify_admin(f"今日推送任务失败：{e}")
+
+
 def build_scheduler() -> AsyncIOScheduler:
     """构造调度器并注册所有 jobs。返回的 scheduler 还没 start，caller 决定何时启动。"""
     scheduler = AsyncIOScheduler(timezone=settings.TIMEZONE)
@@ -52,4 +96,30 @@ def build_scheduler() -> AsyncIOScheduler:
         max_instances=1,  # 上一次还没跑完不要再启新的
         coalesce=True,  # 错过的执行合并成一次
     )
+    scheduler.add_job(
+        generate_daily_digest_job,
+        CronTrigger(hour=19, minute=30),
+        id="generate_daily_digest",
+        name="generate daily digest before push",
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        push_daily_digest_job,
+        CronTrigger(hour=20, minute=0),
+        id="push_daily_digest",
+        name="push daily digest to subscribers",
+        max_instances=1,
+        coalesce=True,
+    )
     return scheduler
+
+
+async def _notify_admin(text: str) -> None:
+    if settings.ADMIN_USER_ID is None:
+        return
+    try:
+        bot = Bot(settings.TELEGRAM_BOT_TOKEN)
+        await bot.send_message(settings.ADMIN_USER_ID, text)
+    except Exception:
+        logger.exception("failed to notify admin from scheduler")
