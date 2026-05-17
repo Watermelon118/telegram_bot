@@ -20,7 +20,7 @@ COPY src ./src
 
 RUN uv sync --frozen --no-dev
 
-# Install Chromium and OS libraries into the image for Linux production.
-RUN uv run playwright install --with-deps chromium
+# Install only the Chromium headless shell and OS libraries for Linux production.
+RUN uv run playwright install --with-deps --only-shell chromium
 
 CMD ["uv", "run", "python", "-m", "src.main"]

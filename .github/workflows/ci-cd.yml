@@ -213,8 +213,13 @@ jobs:
           ssh -i ~/.ssh/ec2_key "$EC2_USER@$EC2_HOST" "
             set -euo pipefail
             cd '$DEPLOY_DIR/releases/$RELEASE_SHA'
+            docker builder prune -af || true
+            docker image prune -af || true
+            docker container prune -f || true
             docker compose --env-file .env -f deploy/docker-compose.prod.yml config --quiet
             docker compose --env-file .env -f deploy/docker-compose.prod.yml up -d --build
             ln -sfn '$DEPLOY_DIR/releases/$RELEASE_SHA' '$DEPLOY_DIR/current'
             docker compose --env-file .env -f deploy/docker-compose.prod.yml ps
+            docker builder prune -af || true
+            docker image prune -af --filter 'until=24h' || true
           "
