@@ -110,8 +110,9 @@
 | 3.6 /test_digest 命令 + render | ✅ | admin only；渲染逻辑独立到 `bot/handlers/_digest_render.py` 供 Stage 5 push 复用；handler 总数 10→11 |
 
 **Stage 3 验证**：
-- 后台流程已用真实数据跑通（20 条推 → digest 行 id=1 落库 → 20 条 ai_call_log）
-- 待管理员手动 `/test_digest` 验证 Telegram 渲染效果（媒体下载 + caption + 要闻段）
+- 后台流程已用真实数据跑通（20 条推 → digest 行落库 → ai_call_log 落库）
+- 管理员 `/test_digest` Telegram 端到端测试**通过**（2026-05-17）：head + media + briefs 三段渲染、`sendMediaGroup` 200、所有 AI 调用成功
+- 单次成本 **$0.001687 USD**（5 mini × $0.000043 + 1 4o × $0.001653）
 
 ### Stage 4-5 ⬜ 未开始
 
@@ -132,11 +133,15 @@
 
 ## 上次对话结尾状态
 
-2026-05-17（Stage 3 完成）：
-- **Stage 3 全部完成**（6 个子任务）+ 后端流程已用真数据验证
+2026-05-17（Stage 3 完成 + 已合并 main）：
+- **Stage 3 全部完成**（6 个子任务）+ 端到端 Telegram 验证通过
+- **本次新增的开发流程规范**（沉淀到 `dev-conventions.md` §8）：
+  - 任何新需求开 `feature/<功能名>` 分支开发，测通过后 `--no-ff` merge 回 main，立刻删 feature 分支
+  - 每个子任务一个独立 commit（Stage 3 就是按这个拆的：6 个 feat + 1 docs + 1 refactor）
+  - Stage 3 走通了完整流程：`feature/stage-3-ai-summary-pipeline` → 测试 → merge 进 main → 删分支
 - 项目目前形态：可生成完整 digest 的功能性骨架
   - `src/ai/`：client（含重试 + 成本追踪）+ prompts 模板
-  - `src/services/`：summary（并发摘要）+ media（下载/cleanup）+ digest（编排 + UPSERT）
+  - `src/services/`：summary（并发摘要）+ media（下载/cleanup）+ digest（编排 + UPSERT，要闻段限 Top 5）
   - `src/bot/handlers/`：admin 多了 `/test_digest`；新增 `_digest_render.py` 渲染层（Stage 5 push 复用）
   - 注册 handler 数量：10 → 11
   - 新依赖：openai 2.37 + httpx 0.28
@@ -144,8 +149,6 @@
   1. `docker compose up -d`（Postgres）
   2. `uv run python -m src.main`（bot polling）
   3. `uv run python -m src.worker`（scheduler，每小时 :05 抓一次）
-- **下次对话第一步：管理员手动验证 `/test_digest`**
-  - 启动 bot 后给自己发 `/test_digest`
-  - 期望：收到 "🔥 今日头条 + 媒体 + 链接" 一条 + "📰 今日要闻 + 整体看点" 一条
-  - 若 OK → 进 **Stage 4**（订阅管理 + 审批流）
-  - 若渲染有问题 → 调整 `_digest_render.py` 后再进 Stage 4
+- **下次对话第一步：开 `feature/stage-4-subscription-flow` 分支进 Stage 4**（订阅管理 + 管理员审批）
+  - 当前 worktree 的 feature 分支已合 main 进入待删状态；新 stage 应该用新 worktree / 新 feature 分支
+  - Stage 4 内容见 `PROJECT_BRIEF.md` 第 7 节：subscription state machine、`/subscribe` `/approve` 等
