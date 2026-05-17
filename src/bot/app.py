@@ -31,6 +31,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("deny", admin.deny))
     app.add_handler(CommandHandler("revoke", admin.revoke))
     app.add_handler(CommandHandler("subscribers", admin.subscribers_list))
+    app.add_handler(CommandHandler("test_digest", admin.test_digest))
 
     # ===== 未知命令兜底（必须放最后）=====
     app.add_handler(MessageHandler(filters.COMMAND, user.unknown))

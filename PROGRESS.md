@@ -8,7 +8,7 @@
 
 **项目已转型** —— 从英语学习 bot 改为 **Daily X Digest Bot**，每日 NZ 20:00 自动总结 X 博主 @李老师不是你老师 的当日推文，推给经管理员审批的订阅者。详细需求看 `PROJECT_BRIEF.md`。
 
-**当前阶段**：Stage 2 已完成（项目骨架、Postgres、ORM、迁移、爬虫 service、worker scheduler、bot 权限分级 + 命令骨架），准备进 **Stage 3（AI 摘要管线 + 媒体处理）**。
+**当前阶段**：Stage 3 已完成（OpenAI client 封装 + prompts + summary/media/digest service + `/test_digest` 命令），准备进 **Stage 4（订阅管理 + 管理员审批流）**。
 
 ### 工作模式
 - **Claude 直接写代码**（2026-05-16 改的：之前是"教不写"，开发者觉得自己敲效率太低）。开发者看不懂会主动问。
@@ -46,6 +46,18 @@
 - **2026-05-17 dev-conventions 元规则**：开发者要求在 conventions 第 0 节加规则"教训随手记 + 项目结束清理"。**适用所有项目**。AI 开发过程中遇到坑当时立刻追加到第 13 节，项目交付时主动回顾、去重、把通用教训抽到主章节。
 - **2026-05-17 跑 2.7 时**：第一次抓只拿 17 条，2.7 验证时抓到 20 条。X 首页加载量随时间窗变化，不固定。后续 stage 实现"今日推文"逻辑时不能假设固定数量。
 - **2026-05-17 worker / bot 分进程已落地**：本地开发需要同时开 3 个东西：①`docker compose up -d`（Postgres）②`uv run python -m src.main`（bot）③`uv run python -m src.worker`（scheduler）。生产 Stage 5 会用 systemd 或 docker-compose 统一编排。
+- **2026-05-17 Stage 3 AI 管线设计决策**：
+  - `ai/client.py` 是所有 OpenAI 调用的**唯一入口**（指数退避 3 次重试、token + cost 写入 `ai_call_log`、价格表硬编码在文件常量里 2026-05 抓取）。理由：换模型/加缓存只改一处；服务层不裸调 SDK。
+  - per-tweet 摘要 5 并发（Semaphore 限流），单条挂用 "[摘要失败]" 占位，不拖垮整批；overall takeaway 失败时整体仍能发出。
+  - digest 时间窗用"NZ 当日全天"而不是 brief 写死的"00:00-20:00"——生产 19:30 触发时与 brief 等价，开发期 `/test_digest` 任何时间都能跑。
+  - 单条推（边界）跳过 AI 调用省钱；0 条推不落 `daily_digests` 行（UNIQUE 约束 + 无意义）。
+  - 头条 caption ≤ 1024 字符时附在媒体上，超过自动拆成"媒体 + 文字"两条消息（Telegram bot caption 上限）；视频 > 50MB 退化为"链接 + 说明"。
+  - 渲染逻辑放在 `src/bot/handlers/_digest_render.py`（前缀 `_`），Stage 5 push.py 会复用。
+- **2026-05-17 Stage 3 验证数据**：本地 `/test_digest` 后台流程实测：20 条推（1 头条 + 19 要闻）→ AI 调用 20 次（19 mini + 1 4o）→ 输入 4331 tokens / 输出 498 tokens / 成本 **$0.003144 USD**（≈0.3 美分一次）。按每日 1 次推送估算月成本约 $0.10，OpenAI 不会是预算瓶颈。
+- **2026-05-17 要闻段收紧到 Top 5**：原方案要把"头条之外的所有推文"都摘要进要闻（19 条），用户觉得太长不愿意看。改为"按热度排名 2-6 名共 5 条"，热度低的丢掉不进 digest 也不入库 `other_tweet_ids`。
+  - **理由**：①用户体验（一屏看完）②AI 成本（20 次 → 6 次）③整体看点更聚焦（只综合热门话题不被噪声稀释）
+  - **实现**：`src/services/digest.py` `_BRIEFS_MAX_COUNT=5` 常量；按 `_score()` 排序后切片 `by_heat[1:6]`。
+  - **如何应用**：要改成展示更多/更少，调这个常量即可。
 
 ---
 
@@ -86,7 +98,23 @@
 | 2.8 APScheduler + worker.py | ✅ | AsyncIOScheduler，cron minute=5 每小时触发；src/worker.py 独立进程入口 |
 | 2.9 bot 权限中间件 + handler 重构 | ✅ | src/bot/middleware.py（Role admin/subscriber/guest + require_role 装饰器）；user.py 重写（/start /subscribe /unsubscribe /status + unknown 兜底）；admin.py 5 个占位命令；10 handler 注册 |
 
-### Stage 3-5 ⬜ 未开始
+### Stage 3：AI 摘要管线 + 媒体处理 ✅ 已完成
+
+| 子任务 | 状态 | 备注 |
+|--------|------|------|
+| 3.1 ai/client.py（封装 + 重试 + ai_call_log）| ✅ | openai 2.37 + httpx 0.28；价格表硬编码 gpt-4o-mini / gpt-4o；3 次指数退避 |
+| 3.2 ai/prompts.py | ✅ | per-tweet 摘要（30 字以内一句话）+ overall takeaway（80-150 字 2-3 句） |
+| 3.3 services/summary.py | ✅ | per-tweet 5 并发 Semaphore；单条失败 "[摘要失败]" 占位 |
+| 3.4 services/media.py | ✅ | httpx 下载图/视频到 tempfile；视频 HEAD 预检 + 流式途中守 50MB；cleanup 清临时文件 |
+| 3.5 services/digest.py | ✅ | DigestPackage dataclass；NZ 当日时间窗；UPSERT daily_digests by (date, author) |
+| 3.6 /test_digest 命令 + render | ✅ | admin only；渲染逻辑独立到 `bot/handlers/_digest_render.py` 供 Stage 5 push 复用；handler 总数 10→11 |
+
+**Stage 3 验证**：
+- 后台流程已用真实数据跑通（20 条推 → digest 行落库 → ai_call_log 落库）
+- 管理员 `/test_digest` Telegram 端到端测试**通过**（2026-05-17）：head + media + briefs 三段渲染、`sendMediaGroup` 200、所有 AI 调用成功
+- 单次成本 **$0.001687 USD**（5 mini × $0.000043 + 1 4o × $0.001653）
+
+### Stage 4-5 ⬜ 未开始
 
 见 `PROJECT_BRIEF.md` 第 7 节。
 
@@ -94,7 +122,7 @@
 
 ## 待开发者补充
 
-- ⬜ OpenAI API Key（进 Stage 3 前充值）
+- ✅ OpenAI API Key（已充值 + 配置）
 - ⬜ 家里废笔记本环境（Stage 1.4/1.5 EC2 IP 被 X 风控时启用）
 
 ## 阻塞项
@@ -105,16 +133,22 @@
 
 ## 上次对话结尾状态
 
-2026-05-17：
-- **Stage 2 全部完成**（9 个子任务）
-- 项目目前形态：标准 Python web 后端骨架
-  - `src/` 分层（bot/services/ai/db/scheduler/utils）
-  - 8 张 Postgres 表已建（通过 Alembic）
-  - TwitterScraper service 验证可用，DB UPSERT 工作
-  - APScheduler 注册了 hourly scrape job
-  - Bot 权限分级骨架就位，10 个 handler 注册（subscribe/admin 类全是占位，Stage 4 才接业务逻辑）
-- **本地开发要同时跑的 3 件事**：
+2026-05-17（Stage 3 完成 + 已合并 main）：
+- **Stage 3 全部完成**（6 个子任务）+ 端到端 Telegram 验证通过
+- **本次新增的开发流程规范**（沉淀到 `dev-conventions.md` §8）：
+  - 任何新需求开 `feature/<功能名>` 分支开发，测通过后 `--no-ff` merge 回 main，立刻删 feature 分支
+  - 每个子任务一个独立 commit（Stage 3 就是按这个拆的：6 个 feat + 1 docs + 1 refactor）
+  - Stage 3 走通了完整流程：`feature/stage-3-ai-summary-pipeline` → 测试 → merge 进 main → 删分支
+- 项目目前形态：可生成完整 digest 的功能性骨架
+  - `src/ai/`：client（含重试 + 成本追踪）+ prompts 模板
+  - `src/services/`：summary（并发摘要）+ media（下载/cleanup）+ digest（编排 + UPSERT，要闻段限 Top 5）
+  - `src/bot/handlers/`：admin 多了 `/test_digest`；新增 `_digest_render.py` 渲染层（Stage 5 push 复用）
+  - 注册 handler 数量：10 → 11
+  - 新依赖：openai 2.37 + httpx 0.28
+- **本地开发要同时跑的 3 件事**（不变）：
   1. `docker compose up -d`（Postgres）
   2. `uv run python -m src.main`（bot polling）
   3. `uv run python -m src.worker`（scheduler，每小时 :05 抓一次）
-- 下次对话第一步：进 **Stage 3** —— AI 摘要管线（openai SDK 封装、prompts、digest service、媒体下载）+ 临时 `/test_digest` 命令验证全流程
+- **下次对话第一步：开 `feature/stage-4-subscription-flow` 分支进 Stage 4**（订阅管理 + 管理员审批）
+  - 当前 worktree 的 feature 分支已合 main 进入待删状态；新 stage 应该用新 worktree / 新 feature 分支
+  - Stage 4 内容见 `PROJECT_BRIEF.md` 第 7 节：subscription state machine、`/subscribe` `/approve` 等
