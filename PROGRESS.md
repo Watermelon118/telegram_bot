@@ -8,7 +8,7 @@
 
 **项目已转型** —— 从英语学习 bot 改为 **Daily X Digest Bot**，每日 NZ 20:00 自动总结 X 博主 @李老师不是你老师 的当日推文，推给经管理员审批的订阅者。详细需求看 `PROJECT_BRIEF.md`。
 
-**当前阶段**：Stage 5 已完成（每日推送 + 调度 + Docker 生产部署 + GitHub Actions CI/CD），等待生产 `/test_push` 验证和 24 小时观察。
+**当前阶段**：Stage 5 已完成并部署到 EC2。CI/CD、容器启动、EC2 爬虫、admin-only test push 均已验证通过；后续进入 24 小时观察。
 
 ### 工作模式
 - **Claude 直接写代码**（2026-05-16 改的：之前是"教不写"，开发者觉得自己敲效率太低）。开发者看不懂会主动问。
@@ -166,7 +166,7 @@
 
 ## 上次对话结尾状态
 
-2026-05-18（Stage 5 完成，当前分支 `feature/stage-5-daily-push-deploy`）：
+2026-05-18（Stage 5 完成并部署，当前分支 `main`）：
 - **Stage 5 全部代码和部署配置已完成**：
   - `src/services/push.py`：每日 digest 广播、公告广播、push_history、失败自动禁用。
   - `src/scheduler/jobs.py`：NZ 19:30 生成 digest，NZ 20:00 推送。
@@ -179,4 +179,10 @@
   - `build_scheduler()` 正常注册 3 个 job
   - `docker compose -f deploy/docker-compose.prod.yml config --quiet`
   - `docker build -t daily-x-digest-bot:stage5-local .`
-- **下一步**：merge 到 `main` 后触发 GitHub Actions 手动部署，部署完成后在 Telegram 发 `/test_push` 做生产端到端验证。
+- **生产验证已通过**：
+  - GitHub Actions run `25991487367`：CI success，Deploy success。
+  - EC2 当前 release：`bae9b0eae647a70d6e7ef5edf971688a66d23434`。
+  - `daily-x-postgres` healthy，`daily-x-bot` / `daily-x-worker` running。
+  - EC2 容器内手动跑 `scrape_target_job()`：抓取并入库 19 条推文。
+  - EC2 容器内执行 admin-only test push：`total=1 succeeded=1 failed=0`。
+- **下一步**：观察 24 小时，确认 hourly scrape、19:30 digest 生成、20:00 自动推送都按 NZ 时间运行；如果 X 风控失败，再切住宅 IP 备用方案。

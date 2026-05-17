@@ -665,7 +665,7 @@ PYTHONIOENCODING=utf-8
 - ✅ AWS EC2 悉尼区服务器
 - ⬜ 备用：家里那台废笔记本，新西兰住宅 IP，万一 EC2 被 X 风控用
 
-**下一步**：merge 到 `main` 后触发 GitHub Actions 手动部署；生产部署完成后用 `/test_push` 验证 Telegram 端到端推送。
+**下一步**：观察 24 小时，确认 hourly scrape、19:30 digest 生成、20:00 自动推送按 NZ 时间运行；如果 EC2 被 X 风控，再切住宅 IP 备用方案。
 
 ---
 
