@@ -50,15 +50,15 @@ async def send_digest_to_subscribers(
     bot: Bot,
     package: digest_service.DigestPackage,
 ) -> PushResult:
-    """把 digest 发给所有订阅者。"""
-    subscribers = await _list_enabled_subscribers()
+    """把 digest 发给所有订阅者 + 管理员（管理员永远收到，无论是否在 subscribers 表里）。"""
+    recipients = await _list_daily_push_recipients()
     logger.info(
-        "daily digest push start: digest_id=%s subscribers=%d",
+        "daily digest push start: digest_id=%s recipients=%d",
         package.digest_id,
-        len(subscribers),
+        len(recipients),
     )
     result = await _send_to_many(
-        subscribers,
+        recipients,
         lambda user_id: send_digest_to_chat(bot, user_id, package),
         digest_id=package.digest_id,
         update_last_pushed=True,
@@ -113,6 +113,20 @@ async def _list_enabled_subscribers() -> list[int]:
             .order_by(Subscriber.approved_at.asc())
         )
         return list((await session.execute(stmt)).scalars().all())
+
+
+async def _list_daily_push_recipients() -> list[int]:
+    """每日 digest 推送名单 = enabled subscribers + admin (去重)。
+
+    管理员永远收到日推，无论是否在 subscribers 表里 —— 这是运营者要看自家产出的合理预期，
+    也避免"调度跑了但 0 收件人静悄悄过去"的失败模式。
+    """
+    subscribers = await _list_enabled_subscribers()
+    admin_id = settings.ADMIN_USER_ID
+    if admin_id is not None and admin_id not in subscribers:
+        # admin 放第一个：第一个推送失败就立刻被注意到
+        return [admin_id, *subscribers]
+    return subscribers
 
 
 async def _send_to_many(
