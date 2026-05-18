@@ -47,10 +47,13 @@ uv run python -m src.main
 uv run python -m src.worker
 ```
 
-Useful admin commands:
+User commands (admin + approved subscribers):
 
-- `/test_digest`: generate today's digest and send it only to the admin.
-- `/test_push`: reuse or generate today's digest and send it only to the admin.
+- `/digest`: pull today's digest to your own chat (reuses the daily digest if already generated, otherwise generates on demand).
+
+Admin-only commands:
+
+- `/test_push`: dry-run today's daily push to admin only (does not touch subscribers).
 - `/broadcast <message>`: send an admin announcement to all enabled subscribers.
 - `/cost [days]`: show OpenAI usage cost for recent days.
 

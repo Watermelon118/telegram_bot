@@ -4,6 +4,7 @@
 - /subscribe：申请订阅，通知管理员审批
 - /unsubscribe：取消订阅
 - /status：查询自己订阅状态
+- /digest：手动拉一份当日 digest 到自己对话（管理员 + 订阅者可用）
 - 未知命令兜底
 """
 
@@ -12,7 +13,10 @@ import logging
 from telegram import Update, User
 from telegram.ext import ContextTypes
 
+from src.bot.handlers._digest_render import send_digest_to_chat
+from src.bot.middleware import Role, require_role
 from src.config import settings
+from src.services import digest as digest_service
 from src.services import subscription
 from src.services.subscription import (
     SubscribeResult,
@@ -34,7 +38,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "命令：\n"
         "/subscribe - 申请订阅（需管理员审批）\n"
         "/status - 查询当前状态\n"
-        "/unsubscribe - 取消订阅"
+        "/unsubscribe - 取消订阅\n"
+        "/digest - 立即拉一份当日 digest（订阅者可用）"
     )
 
 
@@ -92,6 +97,33 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if settings.ADMIN_USER_ID == user.id:
         text = f"{text}\n\n你也是管理员。"
     await update.message.reply_text(text)
+
+
+@require_role(Role.ADMIN, Role.SUBSCRIBER)
+async def digest(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """手动拉一份当日 digest 到自己的对话。
+
+    开放给管理员 + 订阅者：他们都是被信任的用户，自取当日 digest 不影响他人。
+    AI 成本：用 get_or_generate_digest，当天已经生成过的复用，不重复调 OpenAI。
+    """
+    if update.message is None or update.effective_chat is None:
+        return
+
+    chat_id = update.effective_chat.id
+    screen_name = settings.TRACKED_X_AUTHOR
+
+    await update.message.reply_text(
+        f"正在为 @{screen_name} 准备当日 digest，请稍候..."
+    )
+
+    try:
+        package = await digest_service.get_or_generate_digest(screen_name)
+    except Exception as e:
+        logger.exception("digest command failed")
+        await update.message.reply_text(f"生成失败：{e}")
+        return
+
+    await send_digest_to_chat(context.bot, chat_id, package)
 
 
 async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
