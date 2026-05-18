@@ -69,8 +69,8 @@ async def generate_digest(
         target_date = datetime.now(tz).date()
 
     # 时间窗：NZ 当日 00:00 → 24:00（按 posted_at 转 NZ 时区过滤）
-    # 生产路径会在 NZ 19:30 触发，那时 00:00-now ≈ 00:00-20:00，符合 brief 2.1
-    # /test_digest 任何时间都能跑，比 brief 写死 00:00-20:00 灵活
+    # 生产路径会在 NZ 20:30 触发，那时 00:00-now ≈ 00:00-21:00
+    # /digest 用户手动触发任何时间都能跑
     window_start = datetime.combine(target_date, time(0, 0), tzinfo=tz)
     window_end = datetime.combine(target_date, time(23, 59, 59), tzinfo=tz)
     # 入库都是 UTC，比较时转 UTC（其实 TIMESTAMPTZ 跨时区比较 PG 会自动处理，
@@ -173,7 +173,7 @@ async def load_digest(
 ) -> DigestPackage | None:
     """从 daily_digests 读取已生成的 digest。
 
-    用途：19:30 生成 digest，20:00 推送时复用，避免重复 AI 调用。
+    用途：20:30 生成 digest，21:00 推送时复用，避免重复 AI 调用。
     返回 None 表示当天还没有生成过。
     """
     tz = ZoneInfo(settings.TIMEZONE)
@@ -293,7 +293,7 @@ async def _upsert_digest(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
         )
-        # 重跑同一天 digest（test_digest 反复调用、或当日补跑）→ 覆盖
+        # 重跑同一天 digest（/digest 反复调用、或当日补跑）→ 覆盖
         stmt = stmt.on_conflict_do_update(
             constraint="uq_digest_date_author",
             set_={
