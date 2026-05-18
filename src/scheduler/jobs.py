@@ -87,10 +87,15 @@ async def push_daily_digest_job() -> None:
 def build_scheduler() -> AsyncIOScheduler:
     """构造调度器并注册所有 jobs。返回的 scheduler 还没 start，caller 决定何时启动。"""
     scheduler = AsyncIOScheduler(timezone=settings.TIMEZONE)
+    # 每个 CronTrigger 必须显式传 timezone：APScheduler 拿到已构造的 trigger 对象时
+    # 不会回灌 scheduler.timezone（base.py `_create_trigger` 对 BaseTrigger 实例直接 return）；
+    # 没传则 CronTrigger 内部回退到 get_localzone()，容器内默认 UTC，
+    # 导致 cron(hour=21) 实际在 UTC 21:00（NZ 09:00 次日）触发。
+    tz = scheduler.timezone
     # 每小时 :05 触发，跟整点错开
     scheduler.add_job(
         scrape_target_job,
-        CronTrigger(minute=5),
+        CronTrigger(minute=5, timezone=tz),
         id="scrape_target",
         name="scrape target X author timeline hourly",
         max_instances=1,  # 上一次还没跑完不要再启新的
@@ -98,7 +103,7 @@ def build_scheduler() -> AsyncIOScheduler:
     )
     scheduler.add_job(
         generate_daily_digest_job,
-        CronTrigger(hour=20, minute=30),
+        CronTrigger(hour=20, minute=30, timezone=tz),
         id="generate_daily_digest",
         name="generate daily digest before push",
         max_instances=1,
@@ -106,7 +111,7 @@ def build_scheduler() -> AsyncIOScheduler:
     )
     scheduler.add_job(
         push_daily_digest_job,
-        CronTrigger(hour=21, minute=0),
+        CronTrigger(hour=21, minute=0, timezone=tz),
         id="push_daily_digest",
         name="push daily digest to subscribers",
         max_instances=1,
