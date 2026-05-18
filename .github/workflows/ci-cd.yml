@@ -57,7 +57,7 @@ jobs:
       DATABASE_URL: "postgresql+asyncpg://postgres:postgres@localhost:5432/x_digest"
       BOT_MODE: "polling"
       TIMEZONE: "Pacific/Auckland"
-      PUSH_TIME: "20:00"
+      PUSH_TIME: "21:00"
       LOG_LEVEL: "INFO"
 
     steps:
@@ -190,7 +190,7 @@ jobs:
           DATABASE_URL=postgresql+asyncpg://postgres:${DATABASE_PASSWORD_URLENCODED}@postgres:5432/x_digest
           BOT_MODE=polling
           TIMEZONE=Pacific/Auckland
-          PUSH_TIME=20:00
+          PUSH_TIME=21:00
           LOG_LEVEL=INFO
           PYTHONUTF8=1
           PYTHONIOENCODING=utf-8

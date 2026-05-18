@@ -34,7 +34,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     await update.message.reply_text(
         "你好！我是 Daily X Digest Bot。\n\n"
-        "每天 20:00 (新西兰时间) 自动推送 @whyyoutouzhele 的当日推文总结。\n\n"
+        "每天 21:00 (新西兰时间) 自动推送 @whyyoutouzhele 的当日推文总结。\n\n"
         "命令：\n"
         "/subscribe - 申请订阅（需管理员审批）\n"
         "/status - 查询当前状态\n"

@@ -44,7 +44,7 @@ async def scrape_target_job() -> None:
 
 
 async def generate_daily_digest_job() -> None:
-    """每天 NZ 19:30：预生成今日 digest，避免 20:00 推送时等 AI。"""
+    """每天 NZ 20:30：预生成今日 digest，避免 21:00 推送时等 AI。"""
     screen_name = settings.TRACKED_X_AUTHOR
     logger.info("generate_daily_digest_job start: %s", screen_name)
     try:
@@ -61,7 +61,7 @@ async def generate_daily_digest_job() -> None:
 
 
 async def push_daily_digest_job() -> None:
-    """每天 NZ 20:00：推送今日 digest 给所有订阅者。"""
+    """每天 NZ 21:00：推送今日 digest 给管理员 + 所有 enabled 订阅者。"""
     logger.info("push_daily_digest_job start")
     try:
         bot = Bot(settings.TELEGRAM_BOT_TOKEN)
@@ -98,7 +98,7 @@ def build_scheduler() -> AsyncIOScheduler:
     )
     scheduler.add_job(
         generate_daily_digest_job,
-        CronTrigger(hour=19, minute=30),
+        CronTrigger(hour=20, minute=30),
         id="generate_daily_digest",
         name="generate daily digest before push",
         max_instances=1,
@@ -106,7 +106,7 @@ def build_scheduler() -> AsyncIOScheduler:
     )
     scheduler.add_job(
         push_daily_digest_job,
-        CronTrigger(hour=20, minute=0),
+        CronTrigger(hour=21, minute=0),
         id="push_daily_digest",
         name="push daily digest to subscribers",
         max_instances=1,

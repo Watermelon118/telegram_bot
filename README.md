@@ -1,7 +1,7 @@
 # Daily X Digest Bot
 
 Telegram bot that watches one X account, summarizes the day's posts with OpenAI,
-and pushes a daily digest to approved subscribers at NZ 20:00.
+and pushes a daily digest to approved subscribers at NZ 21:00.
 
 ## Architecture
 

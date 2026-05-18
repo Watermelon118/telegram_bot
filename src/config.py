@@ -59,7 +59,7 @@ class Settings(BaseSettings):
     WEBHOOK_URL: str = ""
     WEBHOOK_PORT: int = 8443
     TIMEZONE: str = "Pacific/Auckland"
-    PUSH_TIME: str = "20:00"
+    PUSH_TIME: str = "21:00"
     LOG_LEVEL: str = "INFO"
 
     # OpenAI 模型选择，Stage 3 启用
